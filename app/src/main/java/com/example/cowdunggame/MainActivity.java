@@ -11,6 +11,8 @@ import android.content.DialogInterface;
 import android.content.SharedPreferences;
 import android.graphics.Color;
 import android.graphics.drawable.GradientDrawable;
+import android.media.AudioAttributes;
+import android.media.SoundPool;
 import android.os.Bundle;
 import android.os.Handler;
 import android.os.Looper;
@@ -30,7 +32,7 @@ import java.util.Random;
 
 public class MainActivity extends Activity {
 
-    private LinearLayout rowsContainer;
+    private FrameLayout rowsContainer;
     private TextView tvGameLog;
     private Button btnAction;
     private ScrollView scrollView;
@@ -72,6 +74,12 @@ public class MainActivity extends Activity {
     private Runnable hintRunnable;
     private String hintMessage = "";
     private boolean hintShowing = false;
+
+    // 音效：点击鲜花「滴答」，确认选择「send」；喇叭开关
+    private SoundPool soundPool;
+    private int soundDida;
+    private int soundSend;
+    private boolean soundEnabled = true;
 
     // 回合时长：人机对战玩家 3 分钟；真人对战 45 秒（开发文档 4.4）
     private static final int PLAYER_TURN_SECONDS_HOST = 180;
@@ -154,9 +162,9 @@ public class MainActivity extends Activity {
         mainLayout.setBackgroundColor(Color.BLACK);
 
         // 棋盘容器 - 高度 = 屏幕总高度 × 42%（开发文档 5.3：棋盘区 42%）
+        // FrameLayout：棋盘铺底，胜负图片叠加覆盖居中
         int boardHeight = (int) (getResources().getDisplayMetrics().heightPixels * 0.42f);
-        rowsContainer = new LinearLayout(this);
-        rowsContainer.setOrientation(LinearLayout.VERTICAL);
+        rowsContainer = new FrameLayout(this);
         rowsContainer.setBackgroundColor(Color.BLACK);
         LinearLayout.LayoutParams boardParams = new LinearLayout.LayoutParams(
             LinearLayout.LayoutParams.MATCH_PARENT, boardHeight);
@@ -428,6 +436,7 @@ public class MainActivity extends Activity {
 
         setContentView(mainLayout);
 
+        initSound();
         setupGameBoard(false);
         showGameRules();
 
@@ -511,6 +520,7 @@ public class MainActivity extends Activity {
             addLog("请先选择要拿取的鲜花");
             return;
         }
+        playSend(); // 确认选择拿走鲜花：send
 
         addLog(playerName, "拿走了第" + (selectedRow + 1) + "排的" + selectedCount + "朵鲜花");
         remainingFlowers[selectedRow] -= selectedCount;
@@ -518,7 +528,7 @@ public class MainActivity extends Activity {
         // 判胜：玩家拿起最后一朵鲜花
         if (checkGameEnd()) {
             addLog("恭喜" + playerName + "赢了！电脑被迫拿走了牛粪。");
-            endGame();
+            endGame(true);
             return;
         }
 
@@ -559,7 +569,7 @@ public class MainActivity extends Activity {
         if (move == null) {
             // 无棋可走，说明玩家已经拿走最后一朵，判玩家胜
             addLog("恭喜" + playerName + "赢了！电脑被迫拿走了牛粪。");
-            endGame();
+            endGame(true);
             return;
         }
 
@@ -572,7 +582,7 @@ public class MainActivity extends Activity {
         // 判胜：电脑拿起最后一朵鲜花
         if (checkGameEnd()) {
             addLog("游戏结束！" + getPlayerName() + "被迫拿走了牛粪，电脑赢了。");
-            endGame();
+            endGame(false);
             return;
         }
 
@@ -588,7 +598,7 @@ public class MainActivity extends Activity {
     }
 
     // 对局结束：显示「退出棋局」+「准备好了」两个按钮
-    private void endGame() {
+    private void endGame(boolean playerWin) {
         isGameStarted = false;
         stopCountdown();
         remainingFlowers = new int[]{1, 2, 3, 4, 5, 6};
@@ -598,6 +608,36 @@ public class MainActivity extends Activity {
         btnAction.setEnabled(true);
         btnExitGame.setVisibility(View.VISIBLE);
         addLog("本局结束，可再来一局");
+        showResultImage(playerWin);
+    }
+
+    // 游戏结束时覆盖棋盘居中显示胜负图（透明背景），4 秒后自动消失
+    private void showResultImage(boolean playerWin) {
+        if (rowsContainer == null) return;
+        final ImageView result = new ImageView(this);
+        result.setImageResource(playerWin ? R.drawable.you_win : R.drawable.you_lose);
+        result.setScaleType(ImageView.ScaleType.FIT_CENTER);
+        result.setBackgroundColor(Color.TRANSPARENT);
+        // 限制图片尺寸：宽为棋盘宽度的 60%，高不超过棋盘高度的 70%，等比缩放居中
+        rowsContainer.post(new Runnable() {
+            @Override
+            public void run() {
+                int bw = rowsContainer.getWidth();
+                int bh = rowsContainer.getHeight();
+                int w = (int) (bw * 0.6f);
+                int h = (int) (bh * 0.7f);
+                FrameLayout.LayoutParams rp = new FrameLayout.LayoutParams(w, h);
+                rp.gravity = Gravity.CENTER;
+                result.setLayoutParams(rp);
+                rowsContainer.addView(result);
+            }
+        });
+        rowsContainer.postDelayed(new Runnable() {
+            @Override
+            public void run() {
+                rowsContainer.removeView(result);
+            }
+        }, 4000);
     }
 
     // 重置游戏（退出棋局）：回到开局前状态
@@ -638,7 +678,7 @@ public class MainActivity extends Activity {
                     tv.setVisibility(View.INVISIBLE);
                     if (playerSide) {
                         addLog(getPlayerName() + "的回合超时，判负，电脑赢了。");
-                        endGame();
+                        endGame(false);
                     }
                     return;
                 }
@@ -758,6 +798,25 @@ public class MainActivity extends Activity {
                 }
             }
 
+            // 第一行（牛粪行）最右边放喇叭：音效开关
+            if (i == 0) {
+                TextView speaker = new TextView(this);
+                speaker.setText(soundEnabled ? "🔊" : "🔇");
+                speaker.setTextSize(16);
+                speaker.setGravity(Gravity.CENTER);
+                speaker.setClickable(true);
+                speaker.setPadding(px(4), 0, 0, 0);
+                speaker.setLayoutParams(new LinearLayout.LayoutParams(
+                    LinearLayout.LayoutParams.WRAP_CONTENT, LinearLayout.LayoutParams.MATCH_PARENT));
+                speaker.setOnClickListener(new View.OnClickListener() {
+                    @Override
+                    public void onClick(View v) {
+                        toggleSound();
+                    }
+                });
+                rowLayout.addView(speaker);
+            }
+
             // 第二行（两朵鲜花）后面靠右显示提示文字（长按确认按钮 3 秒出现）
             if (i == 1 && hintMessage != null && !hintMessage.isEmpty()) {
                 TextView hint = new TextView(this);
@@ -794,6 +853,7 @@ public class MainActivity extends Activity {
         if (position < selectedFlowers[row].length) {
             selectedFlowers[row][position] = !selectedFlowers[row][position];
         }
+        playDida(); // 点击鲜花：滴答
 
         selectedCount = 0;
         for (int i = 0; i < selectedFlowers[row].length; i++) {
@@ -849,6 +909,40 @@ public class MainActivity extends Activity {
         if (btnAction != null) {
             btnAction.setText("确认选择");
         }
+    }
+
+    // ===== 音效 =====
+    private void initSound() {
+        AudioAttributes attrs = new AudioAttributes.Builder()
+            .setUsage(AudioAttributes.USAGE_GAME)
+            .setContentType(AudioAttributes.CONTENT_TYPE_SONIFICATION)
+            .build();
+        soundPool = new SoundPool.Builder()
+            .setMaxStreams(2)
+            .setAudioAttributes(attrs)
+            .build();
+        soundDida = soundPool.load(this, R.raw.dida, 1);
+        soundSend = soundPool.load(this, R.raw.send, 1);
+    }
+
+    // 点击鲜花：滴答
+    private void playDida() {
+        if (soundEnabled && soundPool != null && soundDida != 0) {
+            soundPool.play(soundDida, 1.0f, 1.0f, 1, 0, 1.0f);
+        }
+    }
+
+    // 确认选择/拿走鲜花：send
+    private void playSend() {
+        if (soundEnabled && soundPool != null && soundSend != 0) {
+            soundPool.play(soundSend, 1.0f, 1.0f, 1, 0, 1.0f);
+        }
+    }
+
+    private void toggleSound() {
+        soundEnabled = !soundEnabled;
+        setupGameBoard(true);
+        addLog("音效已" + (soundEnabled ? "开启" : "关闭"));
     }
 
     // 展示游戏规则
@@ -963,6 +1057,15 @@ public class MainActivity extends Activity {
             Toast.makeText(this, "开始下载，请留意通知栏", Toast.LENGTH_SHORT).show();
         } catch (Exception e) {
             Toast.makeText(this, "下载失败: " + e.getMessage(), Toast.LENGTH_LONG).show();
+        }
+    }
+
+    @Override
+    protected void onDestroy() {
+        super.onDestroy();
+        if (soundPool != null) {
+            soundPool.release();
+            soundPool = null;
         }
     }
 
