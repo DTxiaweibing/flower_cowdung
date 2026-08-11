@@ -1,0 +1,24 @@
+<resources>
+    <string name="app_name">鲜花与牛粪</string>
+
+    <!-- 崩溃日志 -->
+    <string name="crash_log_header">=== 鲜花与牛粪 崩溃日志 ===</string>
+    <string name="crash_log_time">时间: </string>
+    <string name="crash_log_device">设备: </string>
+    <string name="crash_no_log_found">暂无崩溃日志</string>
+    <string name="crash_share_title">分享崩溃日志</string>
+    <string name="crash_log_cleared">崩溃日志已清除</string>
+    <string name="crash_report_title">崩溃报告</string>
+    <string name="crash_btn_share">分享日志</string>
+    <string name="crash_btn_clear">清空并返回</string>
+    <string name="crash_occurred">很抱歉，应用出现异常，已记录日志</string>
+
+    <!-- 升级 -->
+    <string name="menu_update_version">检查更新</string>
+    <string name="update_default_log">新版本更新内容未填写</string>
+    <string name="update_error_fetch">获取更新信息失败，请稍后重试</string>
+    <string name="update_title">发现新版本</string>
+    <string name="update_btn_later">稍后提醒</string>
+    <string name="update_btn_ignore">忽略此版本</string>
+    <string name="update_no_update">当前已是最新版本</string>
+</resources>

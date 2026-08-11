@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <color name="colorPrimary">#009688</color>
+    <color name="colorPrimaryDark">#000000</color> <!-- 改为黑色 -->
+    <color name="colorAccent">#FF9800</color>
+
+    <!-- 添加系统颜色 -->
+    <color name="status_bar_color">#FF000000</color> <!-- 黑色 -->
+    <color name="navigation_bar_color">#FF000000</color> <!-- 黑色 -->
+</resources>
