@@ -67,6 +67,12 @@ public class MainActivity extends Activity {
     private Runnable countdownRunnable;
     private int countdownSeconds;
 
+    // 长按「确认选择」3 秒显示提示走法
+    private Handler hintHandler = new Handler(Looper.getMainLooper());
+    private Runnable hintRunnable;
+    private String hintMessage = "";
+    private boolean hintShowing = false;
+
     // 回合时长：人机对战玩家 3 分钟；真人对战 45 秒（开发文档 4.4）
     private static final int PLAYER_TURN_SECONDS_HOST = 180;
     private static final int PLAYER_TURN_SECONDS_VS = 45;
@@ -90,6 +96,11 @@ public class MainActivity extends Activity {
     // 默认来源为「系统」的通用日志
     private void addLog(String message) {
         addLog("系统", message);
+    }
+
+    // 获取玩家昵称：有昵称显示昵称，无昵称显示「昵称」
+    private String getPlayerName() {
+        return playerName == null || playerName.isEmpty() ? "昵称" : playerName;
     }
 
     // 刷新底部昵称按钮：有昵称显示昵称，无昵称显示「昵称」，点击可修改
@@ -248,6 +259,30 @@ public class MainActivity extends Activity {
                 } else {
                     addLog("请先选择要拿取的鲜花");
                 }
+            }
+        });
+        // 长按（按住 3 秒）显示当前棋局提示走法
+        btnAction.setOnTouchListener(new View.OnTouchListener() {
+            @Override
+            public boolean onTouch(View v, android.view.MotionEvent event) {
+                switch (event.getAction()) {
+                    case android.view.MotionEvent.ACTION_DOWN:
+                        hintHandler.removeCallbacks(hintRunnable);
+                        hintRunnable = new Runnable() {
+                            @Override
+                            public void run() {
+                                showTurnHint();
+                            }
+                        };
+                        hintHandler.postDelayed(hintRunnable, 3000);
+                        break;
+                    case android.view.MotionEvent.ACTION_UP:
+                    case android.view.MotionEvent.ACTION_CANCEL:
+                        hintHandler.removeCallbacks(hintRunnable);
+                        hideTurnHint();
+                        break;
+                }
+                return false; // 不拦截，长按不影响单击
             }
         });
         buttonLayout.addView(btnAction);
@@ -432,7 +467,7 @@ public class MainActivity extends Activity {
         if (isGameStarted) return;
         btnAction.setEnabled(false);
         btnAction.setText("已准备");
-        addLog("您已准备");
+        addLog(getPlayerName() + "已准备");
         // 人机对战：电脑自动就绪
         addLog("电脑已准备");
         rowsContainer.postDelayed(new Runnable() {
@@ -459,7 +494,7 @@ public class MainActivity extends Activity {
         if (isPlayerTurn) {
             btnAction.setText("确认选择");
             btnAction.setEnabled(true);
-            addLog("游戏开始！轮到您的回合，请拿取鲜花");
+            addLog("游戏开始！轮到" + getPlayerName() + "的回合，请拿取鲜花");
             startCountdown(true, PLAYER_TURN_SECONDS_HOST);
         } else {
             btnAction.setText("电脑思考中...");
@@ -536,7 +571,7 @@ public class MainActivity extends Activity {
 
         // 判胜：电脑拿起最后一朵鲜花
         if (checkGameEnd()) {
-            addLog("游戏结束！您被迫拿走了牛粪，电脑赢了。");
+            addLog("游戏结束！" + getPlayerName() + "被迫拿走了牛粪，电脑赢了。");
             endGame();
             return;
         }
@@ -548,7 +583,7 @@ public class MainActivity extends Activity {
         setupGameBoard(true);
         btnAction.setEnabled(true);
         btnAction.setText("确认选择");
-        addLog("轮到您的回合，请拿取鲜花");
+        addLog("轮到" + getPlayerName() + "的回合，请拿取鲜花");
         startCountdown(true, PLAYER_TURN_SECONDS_HOST);
     }
 
@@ -602,7 +637,7 @@ public class MainActivity extends Activity {
                     updateCountdownText(tv);
                     tv.setVisibility(View.INVISIBLE);
                     if (playerSide) {
-                        addLog("您的回合超时，判负，电脑赢了。");
+                        addLog(getPlayerName() + "的回合超时，判负，电脑赢了。");
                         endGame();
                     }
                     return;
@@ -723,6 +758,20 @@ public class MainActivity extends Activity {
                 }
             }
 
+            // 第二行（两朵鲜花）后面靠右显示提示文字（长按确认按钮 3 秒出现）
+            if (i == 1 && hintMessage != null && !hintMessage.isEmpty()) {
+                TextView hint = new TextView(this);
+                hint.setText(hintMessage);
+                hint.setTextColor(Color.WHITE);
+                hint.setTextSize(12);
+                hint.setGravity(Gravity.CENTER);
+                hint.setSingleLine(true);
+                hint.setPadding(px(4), 0, 0, 0);
+                hint.setLayoutParams(new LinearLayout.LayoutParams(
+                    LinearLayout.LayoutParams.WRAP_CONTENT, LinearLayout.LayoutParams.MATCH_PARENT));
+                rowLayout.addView(hint);
+            }
+
             centerContainer.addView(rowLayout);
         }
 
@@ -763,6 +812,32 @@ public class MainActivity extends Activity {
         }
     }
 
+    // 长按「确认选择」3 秒：显示当前棋局该拿哪排几朵
+    private void showTurnHint() {
+        if (!isGameStarted || !isPlayerTurn) {
+            return;
+        }
+        ComputerAI.Move move = ComputerAI.getHint(remainingFlowers);
+        if (move == null || move.row < 1) {
+            hintMessage = "";
+            return;
+        }
+        hintMessage = "从第" + move.row + "排拿" + move.count + "朵";
+        hintShowing = true;
+        setupGameBoard(true);
+    }
+
+    private void hideTurnHint() {
+        if (!hintShowing) {
+            return;
+        }
+        hintShowing = false;
+        hintMessage = "";
+        if (rowsContainer != null) {
+            setupGameBoard(true);
+        }
+    }
+
     // 重置选中状态
     private void resetSelectionState() {
         selectedFlowers = new boolean[6][];
@@ -792,7 +867,7 @@ public class MainActivity extends Activity {
             "2. 点击选中要拿取的鲜花，选中的鲜花会变暗显示",
             "3. 再次点击已选中的鲜花取消选择",
             "4. 点击「确认选择 / 鲜花拿来」确认拿取",
-            "点击「准备好了」开始您的第一局游戏！"
+            "点击「准备好了」开始" + getPlayerName() + "的第一局游戏！"
         };
         for (String rule : rules) {
             tvGameLog.append(rule + "\n");
