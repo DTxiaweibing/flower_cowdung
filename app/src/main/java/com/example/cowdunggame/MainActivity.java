@@ -804,8 +804,8 @@ public class MainActivity extends Activity {
         final UpdateManager updateManager = new UpdateManager(this);
         updateManager.setCallback(new UpdateManager.UpdateCallback() {
             @Override
-            public void onUpdateAvailable(String latestVersion, String updateLog) {
-                showUpdateDialog(latestVersion, updateLog);
+            public void onUpdateAvailable(String latestVersion, String updateLog, String apkUrl) {
+                showUpdateDialog(latestVersion, updateLog, apkUrl);
                 updateManager.shutdown();
             }
 
@@ -834,14 +834,18 @@ public class MainActivity extends Activity {
         updateManager.checkForUpdate(currentVersion);
     }
 
-    private void showUpdateDialog(final String version, final String log) {
+    private void showUpdateDialog(final String version, final String log, final String apkUrl) {
         AlertDialog.Builder builder = new AlertDialog.Builder(this);
         builder.setTitle(getString(R.string.update_title) + " v" + version);
         builder.setMessage((log == null || log.isEmpty()) ? getString(R.string.update_default_log) : log);
         builder.setPositiveButton("立即更新", new DialogInterface.OnClickListener() {
             @Override
             public void onClick(DialogInterface dialog, int which) {
-                Toast.makeText(MainActivity.this, "更新地址待配置", Toast.LENGTH_SHORT).show();
+                if (apkUrl == null || apkUrl.trim().isEmpty()) {
+                    Toast.makeText(MainActivity.this, "下载地址未配置", Toast.LENGTH_SHORT).show();
+                } else {
+                    downloadAndInstallApk(apkUrl);
+                }
             }
         });
         builder.setNegativeButton(getString(R.string.update_btn_later), new DialogInterface.OnClickListener() {
@@ -863,6 +867,28 @@ public class MainActivity extends Activity {
         final UpdateManager updateManager = new UpdateManager(this);
         updateManager.ignoreVersion(version);
         updateManager.shutdown();
+    }
+
+    // 用系统下载器下载 APK 到公共下载目录，下载完成后通知栏可点击安装
+    private void downloadAndInstallApk(String apkUrl) {
+        try {
+            android.app.DownloadManager dm =
+                    (android.app.DownloadManager) getSystemService(Context.DOWNLOAD_SERVICE);
+            android.net.Uri uri = android.net.Uri.parse(apkUrl);
+            android.app.DownloadManager.Request request =
+                    new android.app.DownloadManager.Request(uri);
+            request.setMimeType("application/vnd.android.package-archive");
+            request.setNotificationVisibility(
+                    android.app.DownloadManager.Request.VISIBILITY_VISIBLE_NOTIFY_COMPLETED);
+            request.setTitle("鲜花与牛粪 新版本下载");
+            request.setDestinationInExternalPublicDir(
+                    android.os.Environment.DIRECTORY_DOWNLOADS,
+                    "cowdung_update.apk");
+            dm.enqueue(request);
+            Toast.makeText(this, "开始下载，请留意通知栏", Toast.LENGTH_SHORT).show();
+        } catch (Exception e) {
+            Toast.makeText(this, "下载失败: " + e.getMessage(), Toast.LENGTH_LONG).show();
+        }
     }
 
     // ===== 样式辅助 =====

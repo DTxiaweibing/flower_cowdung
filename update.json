@@ -1,0 +1,17 @@
+{
+    "config_version": "2.0",
+    "file_info": {
+        "version": "2.0",
+        "name": "cowdung.apk",
+        "size": 10554242,
+        "md5": "PENDING",
+        "sha256": "PENDING",
+        "signature_fingerprint": "PENDING",
+        "download_url": "https://github.com/DTxiaweibing/flower_cowdung/releases/latest/download/cowdung.apk"
+    },
+    "update_log": "当前已是最新版本",
+    "metadata": {
+        "生成时间": "2026-08-11T21:41:57+08:00",
+        "JSON文件生成器版本": "1.02"
+    }
+}

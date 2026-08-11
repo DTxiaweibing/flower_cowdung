@@ -33,7 +33,8 @@ public class UpdateManager {
     private static final String TAG = "UpdateManager";
 
     /** ★ 读取 update.json 的位置（留空，待部署后填写）★ */
-    private static final String UPDATE_URL = "";
+    private static final String UPDATE_URL =
+            "https://raw.githubusercontent.com/DTxiaweibing/flower_cowdung/master/update.json";
 
     private static final String PREFS_NAME = "update_mgr";
     private static final String KEY_UPDATE_SEEN = "update_version_seen";
@@ -48,7 +49,7 @@ public class UpdateManager {
     private UpdateCallback callback;
 
     public interface UpdateCallback {
-        void onUpdateAvailable(String latestVersion, String updateLog);
+        void onUpdateAvailable(String latestVersion, String updateLog, String apkUrl);
         void onUpdateChecked(boolean hasUpdate);
         void onError(String error);
     }
@@ -83,6 +84,10 @@ public class UpdateManager {
         return prefs.getString("update_log", "");
     }
 
+    public String getApkUrl() {
+        return prefs.getString("apk_url", "");
+    }
+
     public void markUpdateSeen() {
         prefs.edit()
             .putBoolean("has_update", false)
@@ -111,8 +116,11 @@ public class UpdateManager {
                     return;
                 }
 
-                String latestVersion = update.getString("version");
+                // 样式：版本号与下载地址都在 file_info 节点下
+                JSONObject fileInfo = update.getJSONObject("file_info");
+                String latestVersion = fileInfo.getString("version");
                 String updateLog = update.optString("update_log", context.getString(R.string.update_default_log));
+                String apkUrl = fileInfo.optString("download_url", "");
 
                 if (isNewerVersion(latestVersion, currentVersion)) {
                     if (!isVersionIgnored(latestVersion)) {
@@ -120,8 +128,9 @@ public class UpdateManager {
                             .putBoolean("has_update", true)
                             .putString("latest_version", latestVersion)
                             .putString("update_log", updateLog)
+                            .putString("apk_url", apkUrl)
                             .apply();
-                        notifyUpdateAvailable(latestVersion, updateLog);
+                        notifyUpdateAvailable(latestVersion, updateLog, apkUrl);
                     } else {
                         prefs.edit().putBoolean("has_update", false).apply();
                         notifyChecked(false);
@@ -192,9 +201,9 @@ public class UpdateManager {
         }
     }
 
-    private void notifyUpdateAvailable(final String version, final String log) {
+    private void notifyUpdateAvailable(final String version, final String log, final String apkUrl) {
         mainHandler.post(() -> {
-            if (callback != null) callback.onUpdateAvailable(version, log);
+            if (callback != null) callback.onUpdateAvailable(version, log, apkUrl);
         });
     }
 
