@@ -15,16 +15,29 @@
         android:label="鲜花与牛粪"
         android:theme="@style/AppTheme">
         <activity
-            android:name=".MainActivity"
+            android:name=".MenuActivity"
             android:label="鲜花与牛粪"
             android:exported="true"
-            android:launchMode="singleTop"
-            android:windowSoftInputMode="adjustResize|stateAlwaysHidden">
+            android:launchMode="singleTop">
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
         </activity>
+        <activity
+            android:name=".MainActivity"
+            android:label="鲜花与牛粪"
+            android:exported="true"
+            android:launchMode="singleTop"
+            android:windowSoftInputMode="adjustResize|stateAlwaysHidden" />
+        <activity
+            android:name=".LobbyActivity"
+            android:label="游戏大厅"
+            android:exported="false" />
+        <activity
+            android:name=".PrivateRoomActivity"
+            android:label="私人房间"
+            android:exported="false" />
         <activity
             android:name=".CrashReportActivity"
             android:excludeFromRecents="true"
