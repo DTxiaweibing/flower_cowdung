@@ -18,6 +18,8 @@ import android.os.Handler;
 import android.os.Looper;
 import android.view.Gravity;
 import android.view.View;
+import android.view.ViewGroup;
+import android.view.ViewParent;
 import android.widget.Button;
 import android.widget.EditText;
 import android.widget.FrameLayout;
@@ -75,11 +77,16 @@ public class MainActivity extends Activity {
     private String hintMessage = "";
     private boolean hintShowing = false;
 
-    // 音效：点击鲜花「滴答」，确认选择「send」；喇叭开关
+    // 音效：点击鲜花「滴答」，确认选择「send」，胜利/失败音效；喇叭开关
     private SoundPool soundPool;
     private int soundDida;
     private int soundSend;
+    private int soundWin;
+    private int soundLose;
     private boolean soundEnabled = true;
+
+    // 胜负结果图：常驻显示，直到按下「退出棋局」或「准备好了」
+    private ImageView resultImage;
 
     // 回合时长：人机对战玩家 3 分钟；真人对战 45 秒（开发文档 4.4）
     private static final int PLAYER_TURN_SECONDS_HOST = 180;
@@ -473,6 +480,7 @@ public class MainActivity extends Activity {
 
     // 玩家点击「准备好了」：玩家就绪，人机对战电脑自动就绪，双方就绪后开局
     private void markPlayerReady() {
+        hideResultImage();
         if (isGameStarted) return;
         btnAction.setEnabled(false);
         btnAction.setText("已准备");
@@ -608,12 +616,18 @@ public class MainActivity extends Activity {
         btnAction.setEnabled(true);
         btnExitGame.setVisibility(View.VISIBLE);
         addLog("本局结束，可再来一局");
+        if (playerWin) {
+            playWin();
+        } else {
+            playLose();
+        }
         showResultImage(playerWin);
     }
 
-    // 游戏结束时覆盖棋盘居中显示胜负图（透明背景），4 秒后自动消失
+    // 游戏结束时覆盖棋盘居中显示胜负图（透明背景），常驻直到按「退出棋局」/「准备好了」
     private void showResultImage(boolean playerWin) {
         if (rowsContainer == null) return;
+        hideResultImage();
         final ImageView result = new ImageView(this);
         result.setImageResource(playerWin ? R.drawable.you_win : R.drawable.you_lose);
         result.setScaleType(ImageView.ScaleType.FIT_CENTER);
@@ -629,19 +643,26 @@ public class MainActivity extends Activity {
                 FrameLayout.LayoutParams rp = new FrameLayout.LayoutParams(w, h);
                 rp.gravity = Gravity.CENTER;
                 result.setLayoutParams(rp);
+                resultImage = result;
                 rowsContainer.addView(result);
             }
         });
-        rowsContainer.postDelayed(new Runnable() {
-            @Override
-            public void run() {
-                rowsContainer.removeView(result);
+    }
+
+    // 移除胜负结果图
+    private void hideResultImage() {
+        if (resultImage != null) {
+            ViewParent parent = resultImage.getParent();
+            if (parent instanceof ViewGroup) {
+                ((ViewGroup) parent).removeView(resultImage);
             }
-        }, 4000);
+            resultImage = null;
+        }
     }
 
     // 重置游戏（退出棋局）：回到开局前状态
     private void resetGame() {
+        hideResultImage();
         isGameStarted = false;
         stopCountdown();
         remainingFlowers = new int[]{1, 2, 3, 4, 5, 6};
@@ -817,21 +838,38 @@ public class MainActivity extends Activity {
                 rowLayout.addView(speaker);
             }
 
-            // 第二行（两朵鲜花）后面靠右显示提示文字（长按确认按钮 3 秒出现）
-            if (i == 1 && hintMessage != null && !hintMessage.isEmpty()) {
-                TextView hint = new TextView(this);
-                hint.setText(hintMessage);
-                hint.setTextColor(Color.WHITE);
-                hint.setTextSize(12);
-                hint.setGravity(Gravity.CENTER);
-                hint.setSingleLine(true);
-                hint.setPadding(px(4), 0, 0, 0);
-                hint.setLayoutParams(new LinearLayout.LayoutParams(
-                    LinearLayout.LayoutParams.WRAP_CONTENT, LinearLayout.LayoutParams.MATCH_PARENT));
-                rowLayout.addView(hint);
-            }
+            // 第二行（两朵鲜花）：用 FrameLayout 浮层显示提示文字。
+            // 提示文字不参与行布局（不占宽度），无论显示与否鲜花格子位置恒定，
+            // 只在长按确认按钮 3 秒时于右侧浮动显示走法提示
+            if (i == 1) {
+                FrameLayout frame = new FrameLayout(this);
+                frame.setLayoutParams(rowLayout.getLayoutParams());
+                frame.setBackgroundColor(Color.BLACK);
+                rowLayout.setLayoutParams(new LinearLayout.LayoutParams(
+                    LinearLayout.LayoutParams.MATCH_PARENT,
+                    LinearLayout.LayoutParams.MATCH_PARENT));
+                frame.addView(rowLayout);
 
-            centerContainer.addView(rowLayout);
+                TextView hint = new TextView(this);
+                hint.setText(hintMessage != null ? hintMessage : "");
+                hint.setTextColor(Color.WHITE);
+                hint.setTextSize(16);
+                hint.setSingleLine(true);
+                hint.setPadding(px(6), 0, px(6), 0);
+                if (hintMessage == null || hintMessage.isEmpty()) {
+                    hint.setVisibility(View.GONE);
+                }
+                FrameLayout.LayoutParams hp = new FrameLayout.LayoutParams(
+                    FrameLayout.LayoutParams.WRAP_CONTENT,
+                    FrameLayout.LayoutParams.WRAP_CONTENT);
+                hp.gravity = Gravity.RIGHT | Gravity.CENTER_VERTICAL;
+                hint.setLayoutParams(hp);
+                frame.addView(hint);
+
+                centerContainer.addView(frame);
+            } else {
+                centerContainer.addView(rowLayout);
+            }
         }
 
         rowsContainer.addView(centerContainer);
@@ -882,7 +920,7 @@ public class MainActivity extends Activity {
             hintMessage = "";
             return;
         }
-        hintMessage = "从第" + move.row + "排拿" + move.count + "朵";
+        hintMessage = "从第" + (move.row + 1) + "排拿" + move.count + "朵";
         hintShowing = true;
         setupGameBoard(true);
     }
@@ -923,6 +961,8 @@ public class MainActivity extends Activity {
             .build();
         soundDida = soundPool.load(this, R.raw.dida, 1);
         soundSend = soundPool.load(this, R.raw.send, 1);
+        soundWin = soundPool.load(this, R.raw.win, 1);
+        soundLose = soundPool.load(this, R.raw.lose, 1);
     }
 
     // 点击鲜花：滴答
@@ -936,6 +976,20 @@ public class MainActivity extends Activity {
     private void playSend() {
         if (soundEnabled && soundPool != null && soundSend != 0) {
             soundPool.play(soundSend, 1.0f, 1.0f, 1, 0, 1.0f);
+        }
+    }
+
+    // 胜利音效
+    private void playWin() {
+        if (soundEnabled && soundPool != null && soundWin != 0) {
+            soundPool.play(soundWin, 1.0f, 1.0f, 1, 0, 1.0f);
+        }
+    }
+
+    // 失败音效
+    private void playLose() {
+        if (soundEnabled && soundPool != null && soundLose != 0) {
+            soundPool.play(soundLose, 1.0f, 1.0f, 1, 0, 1.0f);
         }
     }
 
