@@ -5,6 +5,9 @@
 package com.example.cowdunggame;
 
 import android.app.Activity;
+import android.app.AlertDialog;
+import android.content.DialogInterface;
+import android.content.Intent;
 import android.graphics.Color;
 import android.graphics.drawable.GradientDrawable;
 import android.os.Bundle;
@@ -64,6 +67,25 @@ public class PrivateRoomActivity extends Activity {
         roomParams.topMargin = dp(24);
         roomNo.setLayoutParams(roomParams);
         panel.addView(roomNo);
+
+        // 房间内的桌子：空桌，左右可坐两位玩家（本人已就座）
+        TableDishView table = new TableDishView(this);
+        android.content.SharedPreferences sp =
+            getSharedPreferences("CowDungPrefs", android.content.Context.MODE_PRIVATE);
+        boolean selfMale = "male".equals(sp.getString("PlayerGender", "male"));
+        table.setState(false, true, false, false, selfMale, true);
+        table.setClickable(true);
+        LinearLayout.LayoutParams tableParams = new LinearLayout.LayoutParams(dp(160), dp(160));
+        tableParams.gravity = Gravity.CENTER_HORIZONTAL;
+        tableParams.topMargin = dp(16);
+        table.setLayoutParams(tableParams);
+        table.setOnClickListener(new View.OnClickListener() {
+            @Override
+            public void onClick(View v) {
+                showRoomTableChoice();
+            }
+        });
+        panel.addView(table);
 
         // 等待提示 + 转圈
         ProgressBar waiting = new ProgressBar(this);
@@ -133,6 +155,27 @@ public class PrivateRoomActivity extends Activity {
 
         root.addView(panel);
         setContentView(root);
+    }
+
+    private void showRoomTableChoice() {
+        AlertDialog.Builder builder = new AlertDialog.Builder(this);
+        builder.setTitle("选择");
+        builder.setItems(new String[]{"坐下玩游戏", "当观众"},
+            new DialogInterface.OnClickListener() {
+                @Override
+                public void onClick(DialogInterface dialog, int which) {
+                    if (which == 0) {
+                        Intent intent = new Intent(PrivateRoomActivity.this, MainActivity.class);
+                        intent.putExtra("source", "private");
+                        startActivity(intent);
+                    } else {
+                        android.widget.Toast.makeText(PrivateRoomActivity.this,
+                            "观战模式即将上线，敬请期待", android.widget.Toast.LENGTH_SHORT).show();
+                    }
+                }
+            });
+        builder.setNegativeButton("取消", null);
+        builder.show();
     }
 
     private GradientDrawable roundedBg(int color) {

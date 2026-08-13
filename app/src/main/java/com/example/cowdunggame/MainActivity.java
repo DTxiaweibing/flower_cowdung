@@ -8,6 +8,7 @@ import android.app.Activity;
 import android.app.AlertDialog;
 import android.content.Context;
 import android.content.DialogInterface;
+import android.content.Intent;
 import android.content.SharedPreferences;
 import android.graphics.Color;
 import android.graphics.drawable.GradientDrawable;
@@ -52,7 +53,9 @@ public class MainActivity extends Activity {
     private SharedPreferences sharedPreferences;
     private static final String PREFS_NAME = "CowDungPrefs";
     private static final String KEY_PLAYER_NAME = "PlayerName";
+    private static final String KEY_PLAYER_GENDER = "PlayerGender";
     private String playerName;
+    private String playerGender = "male"; // male/female，用于本人头像 man/women
     private EditText etMessageInput;
     private Button btnSendMessage;
     private Button btnNickname;
@@ -87,6 +90,9 @@ public class MainActivity extends Activity {
 
     // 胜负结果图：常驻显示，直到按下「退出棋局」或「准备好了」
     private ImageView resultImage;
+
+    // 本局来源：pve(人机对战)/lobby(游戏大厅)/private(私密房间)，决定退出棋局回到哪里
+    private String gameSource = "pve";
 
     // 回合时长：人机对战玩家 3 分钟；真人对战 45 秒（开发文档 4.4）
     private static final int PLAYER_TURN_SECONDS_HOST = 180;
@@ -160,6 +166,10 @@ public class MainActivity extends Activity {
 
         sharedPreferences = getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE);
         playerName = sharedPreferences.getString(KEY_PLAYER_NAME, "");
+        playerGender = sharedPreferences.getString(KEY_PLAYER_GENDER, "male");
+        if (getIntent() != null && getIntent().hasExtra("source")) {
+            gameSource = getIntent().getStringExtra("source");
+        }
 
         resetSelectionState();
 
@@ -239,7 +249,7 @@ public class MainActivity extends Activity {
         btnExitGame.setOnClickListener(new View.OnClickListener() {
             @Override
             public void onClick(View v) {
-                resetGame();
+                exitGame();
             }
         });
         btnExitGame.setLayoutParams(new FrameLayout.LayoutParams(
@@ -452,14 +462,56 @@ public class MainActivity extends Activity {
         }
     }
 
-    // 昵称输入对话框（本地身份，可随意设置）
+    // 昵称输入对话框（本地身份，可随意设置）：昵称 + 性别（男/女，用于本人头像）
     private void showNameInputDialog() {
         AlertDialog.Builder builder = new AlertDialog.Builder(this);
-        builder.setTitle("请输入昵称");
+        builder.setTitle("请设置昵称和性别");
+
+        LinearLayout content = new LinearLayout(this);
+        content.setOrientation(LinearLayout.VERTICAL);
+        content.setPadding(dp(20), dp(10), dp(20), 0);
+
         final EditText input = new EditText(this);
         input.setSingleLine(true);
+        input.setHint("昵称");
         input.setText(playerName);
-        builder.setView(input);
+        content.addView(input);
+
+        final String[] genders = {"男", "女"};
+        final String[] genderKeys = {"male", "female"};
+        final boolean[] selected = {genderKeys[0].equals(playerGender)};
+        LinearLayout genderRow = new LinearLayout(this);
+        genderRow.setOrientation(LinearLayout.HORIZONTAL);
+        for (int i = 0; i < genders.length; i++) {
+            final int idx = i;
+            Button gb = new Button(this);
+            gb.setText(genders[i]);
+            gb.setTextSize(14);
+            gb.setTextColor(Color.WHITE);
+            gb.setAllCaps(false);
+            gb.setBackground(roundedStrokeBg(genderKeys[idx].equals(playerGender) ? 0xFF1E88E5 : 0xFF3A3A3A));
+            LinearLayout.LayoutParams gParams = new LinearLayout.LayoutParams(0, dp(40), 1f);
+            gParams.setMargins(dp(4), dp(8), dp(4), 0);
+            gb.setLayoutParams(gParams);
+            gb.setOnClickListener(new View.OnClickListener() {
+                @Override
+                public void onClick(View v) {
+                    selected[0] = genderKeys[idx].equals("male");
+                    // 重设按钮高亮
+                    if (genderRow != null) {
+                        for (int j = 0; j < genderRow.getChildCount(); j++) {
+                            Button other = (Button) genderRow.getChildAt(j);
+                            boolean active = genderKeys[j].equals(genderKeys[idx]);
+                            other.setBackground(roundedStrokeBg(active ? 0xFF1E88E5 : 0xFF3A3A3A));
+                        }
+                    }
+                }
+            });
+            genderRow.addView(gb);
+        }
+        content.addView(genderRow);
+
+        builder.setView(content);
         builder.setPositiveButton("确认", new DialogInterface.OnClickListener() {
             @Override
             public void onClick(DialogInterface dialog, int which) {
@@ -467,12 +519,15 @@ public class MainActivity extends Activity {
                 if (name.isEmpty()) {
                     name = "玩家";
                 }
+                String gender = selected[0] ? "male" : "female";
                 SharedPreferences.Editor editor = sharedPreferences.edit();
                 editor.putString(KEY_PLAYER_NAME, name);
+                editor.putString(KEY_PLAYER_GENDER, gender);
                 editor.apply();
                 playerName = name;
+                playerGender = gender;
                 updateNicknameButton();
-                addLog("昵称已设置为: " + name);
+                addLog("昵称已设置为: " + name + "（" + (selected[0] ? "男" : "女") + "）");
             }
         });
         builder.show();
@@ -660,18 +715,19 @@ public class MainActivity extends Activity {
         }
     }
 
-    // 重置游戏（退出棋局）：回到开局前状态
-    private void resetGame() {
-        hideResultImage();
-        isGameStarted = false;
+    // 退出棋局：
+    //   游戏大厅/私密房间对战 -> 回到原页面（大厅可继续选桌/当观众，私密房间可继续等朋友）
+    //   人机对战 -> 直接退出回到主菜单；按系统返回同样回主菜单
+    private void exitGame() {
         stopCountdown();
-        remainingFlowers = new int[]{1, 2, 3, 4, 5, 6};
-        resetSelectionState();
-        setupGameBoard(false);
-        btnAction.setText("准备好了");
-        btnAction.setEnabled(true);
-        btnExitGame.setVisibility(View.VISIBLE);
-        addLog("已退出棋局，点击「准备好了」开始新一局");
+        if ("lobby".equals(gameSource) || "private".equals(gameSource)) {
+            finish(); // 返回大厅/私密房间
+        } else {
+            Intent intent = new Intent(this, MenuActivity.class);
+            intent.addFlags(Intent.FLAG_ACTIVITY_CLEAR_TOP | Intent.FLAG_ACTIVITY_SINGLE_TOP);
+            startActivity(intent);
+            finish();
+        }
     }
 
     // ===== 回合倒计时 =====

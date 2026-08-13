@@ -18,9 +18,9 @@ public class FloorView extends View {
     // 地砖边宽（px）
     private final int tileSize;
 
-    private static final int BASE = 0xFF2E1F14;      // 深棕地面
-    private static final int BASE_ALT = 0xFF3A2718;  // 相邻砖微亮
-    private static final int LINE = 0xFF55432F;      // 砖缝
+    private static final int BASE = 0xFF9FC3D8;      // 浅蓝地面
+    private static final int BASE_ALT = 0xFFB4D4E6;  // 相邻砖微亮
+    private static final int LINE = 0xFF7DA7BE;      // 砖缝
 
     public FloorView(Context context) {
         super(context);

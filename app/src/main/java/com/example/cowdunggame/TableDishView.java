@@ -1,115 +1,136 @@
 // TableDishView.java
 // 游戏大厅「一张桌子」：俯视图
-//   中心木桌（斜 45 度矩形）
-//   左、右两张椅子面对面：下棋的人（代码绘制小人，区分有人/空位）
-//   上、下两条凳子面对面：观众（有观众时两条凳子各坐两个小人）
-// 纯代码绘制，不依赖图片；是否有人由数据驱动。
+//   中心：桌面图片（空闲桌 table_idle / 对战中 table_playing）
+//   四边座位：左右两张椅子（玩家头像 man/women）、上下两条凳子（观众头像 viewers）
+//   头像直接显示，空位不显示；状态由数据驱动。
 package com.example.cowdunggame;
 
 import android.content.Context;
-import android.graphics.Canvas;
 import android.graphics.Color;
-import android.graphics.Paint;
-import android.graphics.Path;
-import android.graphics.RectF;
-import android.view.View;
+import android.view.Gravity;
+import android.widget.FrameLayout;
+import android.widget.ImageView;
 
-public class TableDishView extends View {
+public class TableDishView extends FrameLayout {
 
-    // 座位状态：true = 有人，false = 空位
+    private ImageView tableImg;
+    private ImageView leftSeat;
+    private ImageView rightSeat;
+    private ImageView topSeat;
+    private ImageView bottomSeat;
+
+    // 状态
+    private boolean playing = false;
     private boolean leftPlayer = false;
     private boolean rightPlayer = false;
     private boolean spectator = false;
-
-    private final Paint paint = new Paint(Paint.ANTI_ALIAS_FLAG);
+    private boolean leftMale = true;
+    private boolean rightMale = true;
 
     public TableDishView(Context context) {
         super(context);
+        setBackgroundColor(Color.TRANSPARENT);
+
+        // 中心桌面图：占满整个组件（桌面图本身含四边空间）
+        tableImg = new ImageView(context);
+        tableImg.setScaleType(ImageView.ScaleType.FIT_CENTER);
+        tableImg.setImageResource(R.drawable.table_idle);
+        FrameLayout.LayoutParams tableParams = new FrameLayout.LayoutParams(
+            FrameLayout.LayoutParams.MATCH_PARENT, FrameLayout.LayoutParams.MATCH_PARENT);
+        tableImg.setLayoutParams(tableParams);
+        addView(tableImg);
+
+        // 四边头像：左右(玩家) / 上下(观众)，桌面留出边缘给座位
+        leftSeat = makeSeat(Gravity.LEFT | Gravity.CENTER_VERTICAL);
+        rightSeat = makeSeat(Gravity.RIGHT | Gravity.CENTER_VERTICAL);
+        topSeat = makeSeat(Gravity.TOP | Gravity.CENTER_HORIZONTAL);
+        bottomSeat = makeSeat(Gravity.BOTTOM | Gravity.CENTER_HORIZONTAL);
+
+        addView(leftSeat);
+        addView(rightSeat);
+        addView(topSeat);
+        addView(bottomSeat);
+
+        refresh();
     }
 
-    // 数据驱动：设置左右下棋人、观众是否有人
-    public void setOccupancy(boolean left, boolean right, boolean spectators) {
-        this.leftPlayer = left;
-        this.rightPlayer = right;
-        this.spectator = spectators;
-        invalidate();
+    private ImageView makeSeat(int gravity) {
+        ImageView seat = new ImageView(getContext());
+        seat.setScaleType(ImageView.ScaleType.FIT_CENTER);
+        seat.setVisibility(GONE);
+        // 头像大小：占桌面宽度的 18%，贴边放置
+        FrameLayout.LayoutParams lp = new FrameLayout.LayoutParams(0, 0, gravity);
+        // 具体尺寸在 onSizeChanged 后按比例设置
+        seat.setTag(gravity);
+        seat.setLayoutParams(lp);
+        return seat;
     }
 
     @Override
-    protected void onDraw(Canvas canvas) {
-        super.onDraw(canvas);
-        float w = getWidth();
-        float h = getHeight();
-        float cx = w / 2f;
-        float cy = h / 2f;
+    protected void onSizeChanged(int w, int h, int oldw, int oldh) {
+        super.onSizeChanged(w, h, oldw, oldh);
+        int seatSize = (int) (Math.min(w, h) * 0.20f);
+        FrameLayout.LayoutParams lpLeft = (FrameLayout.LayoutParams) leftSeat.getLayoutParams();
+        lpLeft.width = seatSize;
+        lpLeft.height = seatSize;
+        lpLeft.leftMargin = (int) (w * 0.02f);
+        leftSeat.setLayoutParams(lpLeft);
 
-        // 中心木桌：旋转 45 度的正方形（菱形），棕木色
-        float tableSize = Math.min(w, h) * 0.52f;
-        paint.setColor(Color.parseColor("#8B5A2B"));
-        paint.setStyle(Paint.Style.FILL);
-        Path table = new Path();
-        table.moveTo(cx, cy - tableSize / 2f);          // 上角
-        table.lineTo(cx + tableSize / 2f, cy);           // 右角
-        table.lineTo(cx, cy + tableSize / 2f);           // 下角
-        table.lineTo(cx - tableSize / 2f, cy);           // 左角
-        table.close();
-        canvas.drawPath(table, paint);
-        // 桌面描边
-        paint.setStyle(Paint.Style.STROKE);
-        paint.setStrokeWidth(dp(1.5f));
-        paint.setColor(Color.parseColor("#5D3A1A"));
-        canvas.drawPath(table, paint);
+        FrameLayout.LayoutParams lpRight = (FrameLayout.LayoutParams) rightSeat.getLayoutParams();
+        lpRight.width = seatSize;
+        lpRight.height = seatSize;
+        lpRight.rightMargin = (int) (w * 0.02f);
+        rightSeat.setLayoutParams(lpRight);
 
-        // 凳子（上/下，观众）：长条矩形，浅木色
-        paint.setStyle(Paint.Style.FILL);
-        paint.setColor(Color.parseColor("#A9825B"));
-        float benchW = w * 0.7f;
-        float benchH = h * 0.13f;
-        // 上凳
-        RectF topBench = new RectF(cx - benchW / 2f, h * 0.02f, cx + benchW / 2f, h * 0.02f + benchH);
-        canvas.drawRoundRect(topBench, dp(3), dp(3), paint);
-        // 下凳
-        RectF bottomBench = new RectF(cx - benchW / 2f, h - h * 0.02f - benchH, cx + benchW / 2f, h - h * 0.02f);
-        canvas.drawRoundRect(bottomBench, dp(3), dp(3), paint);
+        FrameLayout.LayoutParams lpTop = (FrameLayout.LayoutParams) topSeat.getLayoutParams();
+        lpTop.width = seatSize;
+        lpTop.height = seatSize;
+        lpTop.topMargin = (int) (h * 0.02f);
+        topSeat.setLayoutParams(lpTop);
 
-        // 椅子（左/右，下棋人）：靠桌子两侧，深棕
-        paint.setColor(Color.parseColor("#6B4226"));
-        float chairW = w * 0.15f;
-        float chairH = h * 0.22f;
-        RectF leftChair = new RectF(w * 0.02f, cy - chairH / 2f, w * 0.02f + chairW, cy + chairH / 2f);
-        RectF rightChair = new RectF(w - w * 0.02f - chairW, cy - chairH / 2f, w - w * 0.02f, cy + chairH / 2f);
-        canvas.drawRoundRect(leftChair, dp(3), dp(3), paint);
-        canvas.drawRoundRect(rightChair, dp(3), dp(3), paint);
-
-        // 观众（上/下凳子上，各坐两个小人）
-        if (spectator) {
-            drawPerson(canvas, cx - benchW * 0.22f, topBench.centerY(), dp(7), Color.parseColor("#E53935"));
-            drawPerson(canvas, cx + benchW * 0.22f, topBench.centerY(), dp(7), Color.parseColor("#FB8C00"));
-            drawPerson(canvas, cx - benchW * 0.22f, bottomBench.centerY(), dp(7), Color.parseColor("#E53935"));
-            drawPerson(canvas, cx + benchW * 0.22f, bottomBench.centerY(), dp(7), Color.parseColor("#FB8C00"));
-        }
-
-        // 下棋人（左/右椅子上）
-        if (leftPlayer) {
-            drawPerson(canvas, leftChair.centerX(), leftChair.top - dp(8), dp(8), Color.parseColor("#1E88E5"));
-        }
-        if (rightPlayer) {
-            drawPerson(canvas, rightChair.centerX(), rightChair.top - dp(8), dp(8), Color.parseColor("#43A047"));
-        }
+        FrameLayout.LayoutParams lpBottom = (FrameLayout.LayoutParams) bottomSeat.getLayoutParams();
+        lpBottom.width = seatSize;
+        lpBottom.height = seatSize;
+        lpBottom.bottomMargin = (int) (h * 0.02f);
+        bottomSeat.setLayoutParams(lpBottom);
     }
 
-    // 代码绘制小人：圆头 + 圆角矩形身体
-    private void drawPerson(Canvas canvas, float x, float y, float size, int color) {
-        paint.setStyle(Paint.Style.FILL);
-        paint.setColor(color);
-        // 头
-        canvas.drawCircle(x, y, size, paint);
-        // 身体
-        RectF body = new RectF(x - size * 0.8f, y + size * 0.7f, x + size * 0.8f, y + size * 2.1f);
-        canvas.drawRoundRect(body, size * 0.4f, size * 0.4f, paint);
+    // 设置桌子状态与座位
+    public void setState(boolean playing, boolean left, boolean right, boolean spectators,
+                         boolean leftMale, boolean rightMale) {
+        this.playing = playing;
+        this.leftPlayer = left;
+        this.rightPlayer = right;
+        this.spectator = spectators;
+        this.leftMale = leftMale;
+        this.rightMale = rightMale;
+        refresh();
     }
 
-    private int dp(float value) {
-        return (int) (value * getResources().getDisplayMetrics().density + 0.5f);
+    // 便捷：仅设置占用（默认男性玩家）
+    public void setOccupancy(boolean left, boolean right, boolean spectators) {
+        setState(playing, left, right, spectators, true, true);
+    }
+
+    private void refresh() {
+        if (tableImg != null) {
+            tableImg.setImageResource(playing ? R.drawable.table_playing : R.drawable.table_idle);
+        }
+        if (leftSeat != null) {
+            leftSeat.setImageResource(leftMale ? R.drawable.man : R.drawable.women);
+            leftSeat.setVisibility(leftPlayer ? VISIBLE : GONE);
+        }
+        if (rightSeat != null) {
+            rightSeat.setImageResource(rightMale ? R.drawable.man : R.drawable.women);
+            rightSeat.setVisibility(rightPlayer ? VISIBLE : GONE);
+        }
+        if (topSeat != null) {
+            topSeat.setImageResource(R.drawable.viewers);
+            topSeat.setVisibility(spectator ? VISIBLE : GONE);
+        }
+        if (bottomSeat != null) {
+            bottomSeat.setImageResource(R.drawable.viewers);
+            bottomSeat.setVisibility(spectator ? VISIBLE : GONE);
+        }
     }
 }
