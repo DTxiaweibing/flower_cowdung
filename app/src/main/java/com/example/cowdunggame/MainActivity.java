@@ -30,7 +30,10 @@ import android.widget.ScrollView;
 import android.widget.TextView;
 import android.widget.Toast;
 
+import java.util.ArrayList;
+import java.util.HashMap;
 import java.util.Locale;
+import java.util.Map;
 import java.util.Random;
 
 public class MainActivity extends Activity {
@@ -94,6 +97,14 @@ public class MainActivity extends Activity {
     // 本局来源：pve(人机对战)/lobby(游戏大厅)/private(私密房间)，决定退出棋局回到哪里
     private String gameSource = "pve";
 
+    // 观众列表容器（每观众一行昵称，可长按踢出；仅对局玩家可踢）
+    private LinearLayout watcherArea;
+    private final Map<String, Integer> watcherRows = new HashMap<>();
+    private final ArrayList<String> watcherNames = new ArrayList<>();
+
+    // 脏话过滤
+    private final BadWordFilter badWordFilter = new BadWordFilter();
+
     // 回合时长：人机对战玩家 3 分钟；真人对战 45 秒（开发文档 4.4）
     private static final int PLAYER_TURN_SECONDS_HOST = 180;
     private static final int PLAYER_TURN_SECONDS_VS = 45;
@@ -117,6 +128,88 @@ public class MainActivity extends Activity {
     // 默认来源为「系统」的通用日志
     private void addLog(String message) {
         addLog("系统", message);
+    }
+
+    // ===== 观众管理 =====
+    // 观众进入：日志提醒「XXX来了!」，并加入观众列表
+    public void onWatcherEnter(String nickname) {
+        if (nickname == null || nickname.isEmpty()) return;
+        if (!watcherNames.contains(nickname)) {
+            watcherNames.add(nickname);
+            addWatcherRow(nickname);
+        }
+        addLog(nickname + "来了!");
+    }
+
+    // 观众离开/被踢：移除列表
+    public void removeWatcher(String nickname) {
+        if (nickname == null) return;
+        if (watcherNames.contains(nickname)) {
+            watcherNames.remove(nickname);
+            Integer index = watcherRows.remove(nickname);
+            if (index != null && index < watcherArea.getChildCount()) {
+                watcherArea.removeViewAt(index);
+            }
+            rebuildWatcherRows();
+        }
+    }
+
+    // 追加一个观众行（底部按钮触发，仅对局玩家可长按踢出）
+    private void addWatcherRow(final String nickname) {
+        if (watcherArea == null) return;
+        final TextView row = new TextView(this);
+        row.setText("   " + nickname);
+        row.setTextSize(14);
+        row.setTextColor(Color.WHITE);
+        row.setSingleLine(true);
+        row.setPadding(px(4), px(4), px(4), px(4));
+
+        // 是否当前对局玩家（非人机对战、且是下棋玩家而非观众本人）可踢人
+        final boolean canKick = !"pve".equals(gameSource);
+        row.setLongClickable(canKick);
+        if (canKick) {
+            row.setOnLongClickListener(new View.OnLongClickListener() {
+                @Override
+                public boolean onLongClick(View v) {
+                    showKickDialog(nickname);
+                    return true;
+                }
+            });
+        }
+
+        watcherArea.addView(row);
+        watcherRows.put(nickname, watcherArea.getChildCount() - 1);
+    }
+
+    // 重建观众行索引（某行被删后索引变化）
+    private void rebuildWatcherRows() {
+        watcherRows.clear();
+        for (int i = 0; i < watcherArea.getChildCount(); i++) {
+            TextView row = (TextView) watcherArea.getChildAt(i);
+            watcherRows.put(row.getText().toString().trim(), i);
+        }
+    }
+
+    // 长按观众弹出的踢人确认框
+    private void showKickDialog(final String nickname) {
+        new AlertDialog.Builder(this)
+            .setTitle("踢出观战")
+            .setMessage("确定将 " + nickname + " 踢出该房间吗？")
+            .setPositiveButton("踢出", new DialogInterface.OnClickListener() {
+                @Override
+                public void onClick(DialogInterface dialog, int which) {
+                    kickWatcher(nickname);
+                }
+            })
+            .setNegativeButton("取消", null)
+            .show();
+    }
+
+    // 执行踢出：本地移除 + 提示；联网时调用 host_kick RPC（由调用方传入 roomCode）
+    public void kickWatcher(String nickname) {
+        removeWatcher(nickname);
+        addLog(nickname + " 已被踢出房间");
+        // TODO(联网): 若有 room_code 且本人是房主，调用 host_kick RPC
     }
 
     // 获取玩家昵称：有昵称显示昵称，无昵称显示「昵称」
@@ -154,6 +247,11 @@ public class MainActivity extends Activity {
             addLog("请输入要发送的消息");
             return;
         }
+        // 脏话过滤：命中敏感词替换为 *
+        if (badWordFilter.containsBadWord(text)) {
+            addLog("检测到不文明用语，已自动屏蔽");
+        }
+        text = badWordFilter.filter(text);
         addLog(playerName, text);
         if (etMessageInput != null) {
             etMessageInput.setText("");
@@ -360,10 +458,22 @@ public class MainActivity extends Activity {
         logLayout.setLayoutParams(logParams);
 
         TextView logTitle = new TextView(this);
-        logTitle.setText("游戏日志:");
+        logTitle.setText("观众列表");
         logTitle.setTextSize(16);
         logTitle.setTextColor(Color.WHITE);
         logLayout.addView(logTitle);
+
+        // 观众容器：每个观众一行昵称，玩家可长按踢出
+        watcherArea = new LinearLayout(this);
+        watcherArea.setOrientation(LinearLayout.VERTICAL);
+        watcherArea.setBackgroundColor(Color.BLACK);
+        logLayout.addView(watcherArea);
+
+        TextView logSubTitle = new TextView(this);
+        logSubTitle.setText("游戏日志:");
+        logSubTitle.setTextSize(14);
+        logSubTitle.setTextColor(Color.parseColor("#CCCCCC"));
+        logLayout.addView(logSubTitle);
 
         scrollView = new ScrollView(this);
         scrollView.setBackgroundColor(Color.BLACK);

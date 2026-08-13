@@ -27,4 +27,9 @@ dependencies {
     implementation 'androidx.appcompat:appcompat:1.6.1'
     implementation 'com.google.android.material:material:1.12.0'
     implementation fileTree(dir: 'libs', include: ['*.jar'])
+    // 敏感词过滤（与 shrimpfarm 同款）：自带中英文词库，支持拼音/同音字/中介字遮挡
+    implementation 'com.github.houbb:sensitive-word:0.29.5'
+    // Realtime WebSocket（Supabase Realtime 订阅）
+    implementation 'com.squareup.okhttp3:okhttp:5.4.0'
+    implementation 'com.google.code.gson:gson:2.14.0'
 }
