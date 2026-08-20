@@ -138,6 +138,91 @@ public class SeatManager {
     }
 
     // ============================================================
+    // PvP 桌（人人大厅）：入座 / 退出 / 准备 / 心跳
+    // ============================================================
+
+    // 坐下当玩家：自动坐 A 位（左/先手）；A 已有则坐 B 位（右/后手）
+    public void pvpSitAsPlayer(final String tableId, final ResultCallback cb) {
+        background(new Runnable() {
+            @Override
+            public void run() {
+                boolean ok = client != null && client.pvpSit(tableId);
+                deliver(cb, ok, ok ? "入座成功" : "入座失败：座位可能已被占用");
+            }
+        });
+    }
+
+    // 坐下当观众（PvP 亦支持观战；一人限观一桌）
+    public void pvpSitAsWatcher(final String tableId, final ResultCallback cb) {
+        background(new Runnable() {
+            @Override
+            public void run() {
+                boolean ok = client != null && client.pvpWatch(tableId);
+                deliver(cb, ok, ok ? "入座成功" : "观战失败：可能已在其他桌当玩家");
+            }
+        });
+    }
+
+    // 退出：对局中本桌玩家退出，服务端 pvp_leave 自动判对方胜
+    public void pvpLeave(final String tableId, final ResultCallback cb) {
+        background(new Runnable() {
+            @Override
+            public void run() {
+                boolean ok = client != null && client.pvpLeave(tableId);
+                deliver(cb, ok, ok ? "已离座" : "离座失败");
+            }
+        });
+    }
+
+    // 观众退出
+    public void pvpLeaveWatch(final String tableId, final ResultCallback cb) {
+        background(new Runnable() {
+            @Override
+            public void run() {
+                boolean ok = client != null && client.pvpUnwatch(tableId);
+                deliver(cb, ok, ok ? "已退出观战" : "退出观战失败");
+            }
+        });
+    }
+
+    // 按"准备好了"：双方就绪 -> 开局（A 先手，服务端初始化 game_state）
+    public void pvpReady(final String tableId, final ResultCallback cb) {
+        background(new Runnable() {
+            @Override
+            public void run() {
+                boolean ok = client != null && client.pvpReady(tableId);
+                deliver(cb, ok, ok ? "已准备，等待对方" : "准备失败");
+            }
+        });
+    }
+
+    // 本桌玩家：进程存活期间周期心跳（复用 startHeartbeat 的发送器，改发 pvp_heartbeat）
+    public void startPvpHeartbeat(final String tableId) {
+        stopHeartbeat();
+        heartbeatTableId = tableId;
+        heartbeatRunnable = new Runnable() {
+            @Override
+            public void run() {
+                sendPvpHeartbeat(heartbeatTableId);
+                heartbeatHandler.postDelayed(this, HEARTBEAT_INTERVAL_MS);
+            }
+        };
+        heartbeatHandler.post(heartbeatRunnable);
+    }
+
+    private void sendPvpHeartbeat(final String tableId) {
+        if (client == null || tableId == null) return;
+        background(new Runnable() {
+            @Override
+            public void run() {
+                try {
+                    client.pvpHeartbeat(tableId);
+                } catch (Exception ignore) { }
+            }
+        });
+    }
+
+    // ============================================================
     // 纯规则判定（第 25.2 / 25.3 / 25.4 条，静态，任意界面可用）
     // ============================================================
 
@@ -165,6 +250,51 @@ public class SeatManager {
     //   观众 → 否（直接退出）；玩家停摆 → 否（直接退出）；玩家对局中 → 是
     public static boolean needsForfeitConfirm(boolean isWatcher, boolean playing) {
         return !isWatcher && playing;
+    }
+
+    // ============================================================
+    // PvP 桌（人人大厅）：双玩家位 A(左,先手)/B(右,后手)
+    // ============================================================
+
+    // state 为 pvp_tables 行时，A/B 是否有人
+    public static boolean hasPlayerA(JSONObject state) {
+        return state != null && !state.isNull("player_a_id");
+    }
+
+    public static boolean hasPlayerB(JSONObject state) {
+        return state != null && !state.isNull("player_b_id");
+    }
+
+    // 我坐在哪一侧：'a' / 'b' / null（不在本桌）
+    public static String mySide(JSONObject state, String myId) {
+        if (state == null || myId == null) return null;
+        if (myId.equals(state.optString("player_a_id", ""))) return "a";
+        if (myId.equals(state.optString("player_b_id", ""))) return "b";
+        return null;
+    }
+
+    // 我方 / 对方 是否已按"准备好了"
+    public static boolean iAmReady(JSONObject state, String myId) {
+        String side = mySide(state, myId);
+        if ("a".equals(side)) return state != null && state.optBoolean("ready_a", false);
+        if ("b".equals(side)) return state != null && state.optBoolean("ready_b", false);
+        return false;
+    }
+
+    public static boolean opponentReady(JSONObject state, String myId) {
+        String side = mySide(state, myId);
+        if (state == null || side == null) return false;
+        boolean aMe = "a".equals(side);
+        return aMe ? state.optBoolean("ready_b", false) : state.optBoolean("ready_a", false);
+    }
+
+    // 该桌是否满座（A/B 都有玩家）
+    public static boolean isPvpFull(JSONObject state) {
+        return hasPlayerA(state) && hasPlayerB(state);
+    }
+
+    public static boolean isPvpPlaying(JSONObject state) {
+        return state != null && "playing".equals(state.optString("status", ""));
     }
 
     // ============================================================

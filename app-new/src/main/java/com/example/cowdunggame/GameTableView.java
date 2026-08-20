@@ -34,6 +34,7 @@ public class GameTableView extends FrameLayout {
     private ImageView bottomSeat;
     private TextView labelView;
     private TextView leftNickView;
+    private TextView rightNickView;
 
     // 状态
     private boolean playing = false;
@@ -44,6 +45,7 @@ public class GameTableView extends FrameLayout {
     private boolean rightMale = true;
     private boolean botRight = false; // 右侧固定 AIBOT 头像
     private String leftNick = "";   // 左座玩家昵称（头像下方显示）
+    private String rightNick = "";  // 右座玩家昵称（头像下方显示）
 
     // ============================================================
     // 行布局计算：一行 perRow 桌横向铺满屏宽，反解唯一变量 head
@@ -142,6 +144,22 @@ public class GameTableView extends FrameLayout {
         rightSeat.setLayoutParams(rp);
         addView(rightSeat);
 
+        // 右座位昵称（头像正下方，仅玩家显示，默认隐藏）
+        rightNickView = new TextView(context);
+        rightNickView.setTextColor(Color.BLACK);
+        rightNickView.setTextSize(10);
+        rightNickView.setGravity(Gravity.CENTER);
+        rightNickView.setSingleLine(true);
+        rightNickView.setEllipsize(android.text.TextUtils.TruncateAt.END);
+        rightNickView.setShadowLayer(2, 1, 1, Color.WHITE);
+        FrameLayout.LayoutParams rnP = new FrameLayout.LayoutParams(
+            head, (int) (14 * context.getResources().getDisplayMetrics().density));
+        rnP.leftMargin = layout.cardSidePx - head;
+        rnP.topMargin = mid + head / 2;
+        rightNickView.setLayoutParams(rnP);
+        rightNickView.setVisibility(GONE);
+        addView(rightNickView);
+
         // 上座位（贴上缘，水平居中）
         topSeat = makeSeat();
         FrameLayout.LayoutParams tp = new FrameLayout.LayoutParams(head, head);
@@ -222,6 +240,12 @@ public class GameTableView extends FrameLayout {
         refresh();
     }
 
+    // 右座玩家昵称（PvP 双玩家；只有该座有玩家时才显示）
+    public void setRightPlayerLabel(String nick) {
+        this.rightNick = nick;
+        refresh();
+    }
+
     private void refresh() {
         if (deskView != null) {
             deskView.setImageResource(playing ? R.drawable.table_playing : R.drawable.table_idle);
@@ -251,6 +275,14 @@ public class GameTableView extends FrameLayout {
                 rightSeat.setAlpha(1.0f);
             } else {
                 rightSeat.setImageResource(R.drawable.avatar_player_empty);
+            }
+        }
+        if (rightNickView != null) {
+            if (rightOccupied && !botRight && rightNick != null && !rightNick.isEmpty()) {
+                rightNickView.setText(rightNick);
+                rightNickView.setVisibility(VISIBLE);
+            } else {
+                rightNickView.setVisibility(GONE);
             }
         }
         if (topSeat != null) {

@@ -404,6 +404,112 @@ public class SupabaseClient {
         return rpc("pve_forfeit", args).ok;
     }
 
+    // ============================================================
+    // 人人大厅（PvP）桌状态：读表 / 入座 / 离座 / 观战 / 开局上报
+    // 表与 RPC 见 supabase/pvp_tables.sql（预置 20 桌，双玩家位）
+    // ============================================================
+
+    // 拉取全部 PvP 桌状态（按桌号升序）：
+    //   {id, num, status, player_a_id, player_b_id, current_turn_id, ready_a, ready_b,
+    //    game_state, watcher_count, player_a:{gender,nickname}(若 A 坐), player_b:{...}}
+    public JSONArray fetchPvpTables() {
+        try {
+            if (!ensureFreshToken() || accessToken == null) return null;
+            String urlStr = PROJECT_URL
+                + "/rest/v1/pvp_tables?select=*,player_a:profiles!pvp_tables_player_a_id_fkey(gender,nickname),"
+                + "player_b:profiles!pvp_tables_player_b_id_fkey(gender,nickname)&order=num";
+            URL url = new URL(urlStr);
+            HttpURLConnection conn = (HttpURLConnection) url.openConnection();
+            conn.setRequestMethod("GET");
+            conn.setRequestProperty("apikey", ANON_KEY);
+            conn.setRequestProperty("Authorization", "Bearer " + accessToken);
+            conn.setConnectTimeout(15000);
+            conn.setReadTimeout(20000);
+            int code = conn.getResponseCode();
+            String text = read(conn);
+            conn.disconnect();
+            if (code >= 200 && code < 300 && text.trim().startsWith("[")) {
+                return new JSONArray(text);
+            }
+            return null;
+        } catch (Exception e) {
+            return null;
+        }
+    }
+
+    // 拉取单桌状态（轮询/重放用）：返回含 game_state 与双玩家资料的整行
+    public JSONObject fetchPvpTable(String tid) {
+        try {
+            if (!ensureFreshToken() || accessToken == null) return null;
+            String urlStr = PROJECT_URL
+                + "/rest/v1/pvp_tables?select=*,player_a:profiles!pvp_tables_player_a_id_fkey(gender,nickname),"
+                + "player_b:profiles!pvp_tables_player_b_id_fkey(gender,nickname)&id=eq." + tid;
+            URL url = new URL(urlStr);
+            HttpURLConnection conn = (HttpURLConnection) url.openConnection();
+            conn.setRequestMethod("GET");
+            conn.setRequestProperty("apikey", ANON_KEY);
+            conn.setRequestProperty("Authorization", "Bearer " + accessToken);
+            conn.setConnectTimeout(15000);
+            conn.setReadTimeout(20000);
+            int code = conn.getResponseCode();
+            String text = read(conn);
+            conn.disconnect();
+            if (code >= 200 && code < 300 && text.trim().startsWith("[")) {
+                JSONArray arr = new JSONArray(text);
+                return arr.length() > 0 ? arr.getJSONObject(0) : null;
+            }
+            return null;
+        } catch (Exception e) {
+            return null;
+        }
+    }
+
+    // 玩家本人整包上报棋局状态（A/B 双人：落子在本地判定后整包写入，轮询同步）
+    public boolean pvpReportState(String tid, JSONObject state) {
+        JSONObject args = new JSONObject();
+        try {
+            args.put("tid", tid);
+            args.put("state", state);
+        } catch (Exception ignore) { }
+        return rpc("pvp_report_state", args).ok;
+    }
+
+    // 坐下当玩家：优先坐 A 位（左座 / 先手）；若 A 已有人则坐 B 位（右座 / 后手）
+    public boolean pvpSit(String tid) {
+        JSONObject t = fetchPvpTable(tid);
+        boolean aFree = t == null || t.isNull("player_a_id");
+        JSONObject args = new JSONObject();
+        try {
+            args.put("tid", tid);
+        } catch (Exception ignore) { }
+        return rpc(aFree ? "pvp_sit_a" : "pvp_sit_b", args).ok;
+    }
+
+    public boolean pvpLeave(String tid) {
+        return rpc("pvp_leave", arg("tid", tid)).ok;
+    }
+
+    public boolean pvpWatch(String tid) {
+        return rpc("pvp_watch", arg("tid", tid)).ok;
+    }
+
+    public boolean pvpUnwatch(String tid) {
+        return rpc("pvp_unwatch", arg("tid", tid)).ok;
+    }
+
+    // 按"准备好了"：双方就绪且都有人 -> 服务端置 playing 并初始化 game_state（A 先手）
+    public boolean pvpReady(String tid) {
+        return rpc("pvp_ready", arg("tid", tid)).ok;
+    }
+
+    public boolean pvpEnd(String tid) {
+        return rpc("pvp_end", arg("tid", tid)).ok;
+    }
+
+    public boolean pvpHeartbeat(String tid) {
+        return rpc("pvp_heartbeat", arg("tid", tid)).ok;
+    }
+
     private JSONObject arg(String key, String value) {
         JSONObject o = new JSONObject();
         try {

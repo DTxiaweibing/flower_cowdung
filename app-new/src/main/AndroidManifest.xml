@@ -29,6 +29,10 @@
             android:label="人机游戏大厅"
             android:exported="false" />
         <activity
+            android:name=".PvPLobbyActivity"
+            android:label="人人游戏大厅"
+            android:exported="false" />
+        <activity
             android:name=".LocalGameActivity"
             android:label="鲜花与牛粪"
             android:exported="true"

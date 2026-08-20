@@ -1,6 +1,6 @@
 // MenuActivity.java (app-new 精简版)
-// 登录后的主菜单。当前仅一个入口：人机游戏大厅。
-//   （人人游戏大厅 / 私人房间 后续逐个重写，未实现前不留占位入口）
+// 登录后的主菜单。已实现入口：人机游戏大厅 / 人人游戏大厅。
+//   （私人房间 后续重写，未实现前不留占位入口）
 //   底部：注销登录。
 package com.example.cowdunggame;
 
@@ -61,6 +61,13 @@ public class MenuActivity extends Activity {
             @Override
             public void onClick(View v) {
                 startActivity(new Intent(MenuActivity.this, PvELobbyActivity.class));
+            }
+        });
+
+        addMenuButton(menu, "人人游戏大厅", new View.OnClickListener() {
+            @Override
+            public void onClick(View v) {
+                startActivity(new Intent(MenuActivity.this, PvPLobbyActivity.class));
             }
         });
         root.addView(menu);

@@ -72,6 +72,20 @@ public class LocalGameActivity extends Activity {
     private Runnable watchRunnable;
     private int lastRenderedMoveCount = -1;
 
+    // ===== 人人对局（PvP）：来源 source=pvp，本机机器人关闭，改为轮询对方棋子 =====
+    private boolean isPvp = false;        // 是否人人对局
+    private String mySide = null;         // 本桌我坐哪侧：'a'(左/先手) / 'b'(右/后手)
+    private String opponentName = "对手"; // 对方昵称（轮询到资料后更新）
+    private String pvpANick = "等待对手入座..."; // A 侧昵称（观战/日志统一显示用）
+    private String pvpBNick = "等待对手入座..."; // B 侧昵称
+    private boolean pvpResultShown = false; // 防重复显示胜负图
+    private boolean pvpStarted = false;   // 对方开局后才可操作（双方就绪自动开局）
+    private int pvpLogMoveCount = 0;      // 已写入日志的落子步数（轮询增量补记对方落子）
+    // 观战日志增量重建快照（避免每次轮询清空重画打断阅读）
+    private String lastPvpWatcherTurn = "";
+    private boolean lastWatcherReadyA = false;
+    private boolean lastWatcherReadyB = false;
+
     // 本局落子记录（每步上报数据库供观战重放）
     private JSONArray moveList = new JSONArray();
 
@@ -118,12 +132,18 @@ public class LocalGameActivity extends Activity {
             if (tableNo == null) tableNo = String.valueOf(intent.getIntExtra("table_no", 0));
         }
         String role = getIntent() != null ? getIntent().getStringExtra("role") : null;
+        String source = getIntent() != null ? getIntent().getStringExtra("source") : null;
+        isPvp = "pvp".equals(source);
         isWatcher = "watcher".equals(role);
         if (tableNo != null && !tableNo.isEmpty()) {
             client = new SupabaseClient(this);
             seatManager = new SeatManager(client);
             // 遗言：玩家/观众进程存活期间持续心跳（20s/次，配合服务端 3 分钟超时兜底）
-            seatManager.startHeartbeat(tableNo);
+            if (isPvp) {
+                seatManager.startPvpHeartbeat(tableNo);
+            } else {
+                seatManager.startHeartbeat(tableNo);
+            }
         }
 
         resetSelectionState();
@@ -388,6 +408,8 @@ public class LocalGameActivity extends Activity {
         initSound();
         if (isWatcher) {
             setupWatcherMode();
+        } else if (isPvp) {
+            setupPvpPlayerMode();
         } else {
             setupGameBoard(false);
             showGameRules();
@@ -395,10 +417,247 @@ public class LocalGameActivity extends Activity {
         }
     }
 
+    // ===== 人人对局（PvP）玩家模式 =====
+    // 与 PvE 的区别：无本机 AI；整包 game_state 每 2s 轮询同步；
+    //   - 开局：先点「准备好了」上报 pvp_ready；双方就绪 -> 服务端置 playing，A 先手
+    //   - 轮到我的回合：棋盘可点击；提交后整包上报，轮询等对方落子
+    //   - 胜负：轮询读到 finished，winner 判定我胜/负，显示结果图（不上本地结算）
+    private void setupPvpPlayerMode() {
+        tvPlayerName.setText(playerName == null || playerName.isEmpty() ? "我" : playerName);
+        btnAction.setEnabled(false);
+        btnAction.setText("准备好了");
+        setupGameBoard(false);
+        showPvpRules();
+        addLog("人人对局：坐下即对战。点「准备好了」，等对方也准备好后开局（左边先手）");
+        startPvpPolling();
+    }
+
+    private void showPvpRules() {
+        if (tvGameLog != null) tvGameLog.setText("");
+        String[] rules = {
+            "=== 鲜花与牛粪（人人对战）===",
+            "1. 左座先手，双方轮流从任意一排拿走任意数量鲜花",
+            "2. 不能拿牛粪，只能拿鲜花",
+            "3. 被迫拿走牛粪的玩家输掉游戏",
+            "操作：",
+            "1. 点「准备好了」等待对手",
+            "2. 轮到你了，点选鲜花（变暗=已选），点「确认选择」",
+            "3. 对方回合等待其落子，画面自动刷新"
+        };
+        for (String rule : rules) {
+            tvGameLog.append(rule + "\n");
+        }
+    }
+
+    // PvP 轮询：每 2s 拉取本桌 game_state，同步棋盘与回合
+    private void startPvpPolling() {
+        watchHandler.removeCallbacks(watchRunnable);
+        watchRunnable = new Runnable() {
+            @Override
+            public void run() {
+                pollPvpOnce();
+                watchHandler.postDelayed(watchRunnable, 2000);
+            }
+        };
+        watchHandler.postDelayed(watchRunnable, 500);
+    }
+
+    private void pollPvpOnce() {
+        if (client == null || tableNo == null) return;
+        async(new Runnable() {
+            @Override
+            public void run() {
+                final JSONObject table = client.fetchPvpTable(tableNo);
+                runOnUiThread(new Runnable() {
+                    @Override
+                    public void run() {
+                        renderPvpState(table);
+                    }
+                });
+            }
+        });
+    }
+
+    // 用数据库 game_state 驱动：回合指示 / 棋盘 / 胜负 / 双方昵称
+    private void renderPvpState(JSONObject table) {
+        if (table == null) return;
+
+        // 确定我坐哪侧
+        String uid = client != null ? client.getUserId() : null;
+        if (mySide == null) {
+            mySide = SeatManager.mySide(table, uid);
+        }
+
+        // 双方昵称
+        JSONObject a = table.optJSONObject("player_a");
+        JSONObject b = table.optJSONObject("player_b");
+        String aNick = (a != null ? a.optString("nickname", "") : "").trim();
+        String bNick = (b != null ? b.optString("nickname", "") : "").trim();
+        pvpANick = aNick.isEmpty() ? "等待对手入座..." : aNick;
+        pvpBNick = bNick.isEmpty() ? "等待对手入座..." : bNick;
+        if ("a".equals(mySide)) {
+            tvPlayerName.setText(aNick.isEmpty() ? (playerName.isEmpty() ? "我" : playerName) : aNick);
+            opponentName = bNick.isEmpty() ? "等待对手入座..." : bNick;
+        } else if ("b".equals(mySide)) {
+            tvPlayerName.setText(bNick.isEmpty() ? (playerName.isEmpty() ? "我" : playerName) : bNick);
+            opponentName = aNick.isEmpty() ? "等待对手入座..." : aNick;
+        }
+        tvComputerName.setText(opponentName);
+
+        String st = table.optString("status", "open");
+        JSONObject gs = table.optJSONObject("game_state");
+        if (gs == null) gs = new JSONObject();
+        String gsStatus = gs.optString("status", "");
+
+        if ("finished".equals(gsStatus)) {
+            // 胜负已定：winner 'a'/'b'
+            String winner = gs.optString("winner", "");
+            boolean iWon = winner.equals(mySide);
+            if (!pvpResultShown) {
+                pvpResultShown = true;
+                isGameStarted = false;
+                stopCountdown();
+                btnAction.setEnabled(true);
+                btnAction.setText("准备好了");
+                tvGameLog.setText("");
+                rebuildPvpLog(gs, winner);
+                if ("a".equals(winner) || "b".equals(winner)) {
+                    addLog(iWon ? "你赢了！" : "你输了，" + opponentName + " 赢了");
+                }
+                if (iWon) {
+                    playWin();
+                    showResultImage(true);
+                } else {
+                    playLose();
+                    showResultImage(false);
+                }
+            }
+            return;
+        }
+
+        // 等待开局 / 对局中
+        if ("playing".equals(st) && "ongoing".equals(gsStatus)) {
+            if (!isGameStarted) {
+                isGameStarted = true;
+                pvpStarted = true;
+                gameCount++;
+                // 从数据库还原棋盘（开局 1..6）
+                JSONArray flowers = gs.optJSONArray("flowers");
+                if (flowers != null && flowers.length() == 6) {
+                    for (int i = 0; i < 6; i++) {
+                        remainingFlowers[i] = flowers.optInt(i, 0);
+                    }
+                } else {
+                    remainingFlowers = new int[]{1, 2, 3, 4, 5, 6};
+                }
+                // 回合指示：turn 为 'a'/'b'
+                String turn = gs.optString("turn", "a");
+                isPlayerTurn = mySide != null && mySide.equals(turn);
+                resetSelectionState();
+                btnAction.setEnabled(isPlayerTurn);
+                btnAction.setText(isPlayerTurn ? "确认选择" : "对方回合中...");
+                stopCountdown();
+                setupGameBoard(isPlayerTurn);
+                addLog("对局开始！" + (isPlayerTurn
+                    ? "轮到" + pvpMyName() + "的回合" : "轮到" + opponentName + "的回合"));
+                if (isPlayerTurn) startCountdown(true, PLAYER_TURN_SECONDS);
+            } else {
+                // 同步对方落子后的棋盘 & 回合
+                String turn = gs.optString("turn", "");
+                // 增量补记对方落子：日志与观战重放一致（我的落子已在 takeFlowers 记录于计数内）
+                JSONArray gsMoves = gs.optJSONArray("moves");
+                if (gsMoves != null && gsMoves.length() > pvpLogMoveCount) {
+                    for (int i = pvpLogMoveCount; i < gsMoves.length(); i++) {
+                        JSONObject m = gsMoves.optJSONObject(i);
+                        if (m == null) continue;
+                        String side = m.optString("side", "");
+                        int row = m.optInt("row", -1);
+                        int count = m.optInt("count", 0);
+                        if (!"a".equals(side) && !"b".equals(side)) continue;
+                        logPvpMove(pvpNameOf(side), row, count);
+                    }
+                    pvpLogMoveCount = gsMoves.length();
+                }
+                boolean myTurnNow = mySide != null && mySide.equals(turn);
+                if (myTurnNow != isPlayerTurn) {
+                    isPlayerTurn = myTurnNow;
+                    JSONArray flowers = gs.optJSONArray("flowers");
+                    if (flowers != null && flowers.length() == 6) {
+                        for (int i = 0; i < 6; i++) {
+                            remainingFlowers[i] = flowers.optInt(i, 0);
+                        }
+                    }
+                    resetSelectionState();
+                    btnAction.setEnabled(isPlayerTurn);
+                    btnAction.setText(isPlayerTurn ? "确认选择" : "对方回合中...");
+                    stopCountdown();
+                    setupGameBoard(isPlayerTurn);
+                    if (isPlayerTurn) {
+                        addLog("轮到" + pvpMyName() + "的回合");
+                    }
+                    if (isPlayerTurn) startCountdown(true, PLAYER_TURN_SECONDS);
+                }
+            }
+        } else {
+            // 尚未开局：等待双方就绪
+            if (btnAction != null && !isGameStarted && !pvpResultShown) {
+                boolean full = SeatManager.isPvpFull(table);
+                boolean iReady = SeatManager.iAmReady(table, uid);
+                boolean oppReady = SeatManager.opponentReady(table, uid);
+                if (full) {
+                    btnAction.setEnabled(true);
+                    btnAction.setText(iReady ? "已准备，等待对方..." : "准备好了");
+                    if (oppReady && !iReady) {
+                        addLog(opponentName + "已准备，等你准备");
+                    }
+                } else {
+                    btnAction.setEnabled(false);
+                    btnAction.setText("等待对手入座...");
+                }
+            }
+        }
+    }
+
+    private void rebuildPvpLog(JSONObject gs, String winner) {
+        if (tvGameLog == null) return;
+        JSONArray moves = gs.optJSONArray("moves");
+        if (moves == null) return;
+        StringBuilder sb = new StringBuilder();
+        sb.append("=== 第 ").append(tableNo).append(" 桌 对局记录 ===\n");
+        sb.append("左座：").append(pvpNameOf("a")).append("　右座：").append(pvpNameOf("b")).append("\n\n");
+        for (int i = 0; i < moves.length(); i++) {
+            JSONObject m = moves.optJSONObject(i);
+            if (m == null) continue;
+            String side = m.optString("side", "");
+            int row = m.optInt("row", -1);
+            int count = m.optInt("count", 0);
+            if (!"a".equals(side) && !"b".equals(side)) continue;
+            sb.append(pvpNameOf(side)).append("拿走了第").append(row + 1)
+              .append("排的").append(count).append("朵鲜花\n");
+        }
+        sb.append("\n本局结束：");
+        if ("a".equals(winner) || "b".equals(winner)) {
+            String wName = pvpNameOf(winner);
+            String lName = pvpNameOf("a".equals(winner) ? "b" : "a");
+            sb.append(wName).append(" 赢，").append(lName).append(" 输\n");
+        } else {
+            sb.append("平局\n");
+        }
+        tvGameLog.setText(sb.toString());
+        if (scrollView != null) {
+            scrollView.post(new Runnable() {
+                @Override
+                public void run() {
+                    scrollView.fullScroll(ScrollView.FOCUS_DOWN);
+                }
+            });
+        }
+    }
+
     // ===== 观战模式 =====
     // 只读看牌：拉取该桌 game_state，重放每一步，显示真实玩家昵称
     private void setupWatcherMode() {
-        tvPlayerName.setText("观战中");
+        tvPlayerName.setText(isPvp ? "观战中(人人)" : "观战中");
         btnAction.setEnabled(false);
         btnAction.setText("观战中");
         btnAction.setBackground(roundedStrokeBg(0xFF2D2D2D));
@@ -427,7 +686,8 @@ public class LocalGameActivity extends Activity {
         async(new Runnable() {
             @Override
             public void run() {
-                final JSONObject table = client.fetchPveTable(tableNo);
+                final JSONObject table = isPvp ? client.fetchPvpTable(tableNo)
+                    : client.fetchPveTable(tableNo);
                 runOnUiThread(new Runnable() {
                     @Override
                     public void run() {
@@ -442,12 +702,18 @@ public class LocalGameActivity extends Activity {
     private void renderWatcherState(JSONObject table) {
         if (table == null) return;
 
+        if (isPvp) {
+            renderPvpWatcherState(table);
+            return;
+        }
+
         // 真实玩家昵称（从拉取到的 player 资料取）
         JSONObject player = table.optJSONObject("player");
         String nick = (player != null ? player.optString("nickname", "") : "").trim();
         if (nick.isEmpty()) nick = "玩家";
         watcherPlayerName = nick;
         tvPlayerName.setText(watcherPlayerName);
+        setupComputerName("电脑");
 
         JSONObject gs = table.optJSONObject("game_state");
         if (gs == null) gs = new JSONObject();
@@ -488,6 +754,125 @@ public class LocalGameActivity extends Activity {
         // 观众不关心输赢：不显示「你赢了/你输了」图，不播胜负音乐
         // （观战从不上屏胜负图，playWin/playLose 只发生在玩家模式 endGame 中）
         hideResultImage();
+    }
+
+    // 人人观战：显示双玩家昵称与回合指示（A 左/B 右），不上胜负图
+    private void renderPvpWatcherState(JSONObject table) {
+        JSONObject a = table.optJSONObject("player_a");
+        JSONObject b = table.optJSONObject("player_b");
+        String aNick = a != null ? a.optString("nickname", "") : "";
+        String bNick = b != null ? b.optString("nickname", "") : "";
+        if (aNick.isEmpty()) aNick = "先手未入座";
+        if (bNick.isEmpty()) bNick = "后手未入座";
+        tvPlayerName.setText(aNick);
+        setupComputerName(bNick);
+
+        JSONObject gs = table.optJSONObject("game_state");
+        if (gs == null) gs = new JSONObject();
+
+        JSONArray flowers = gs.optJSONArray("flowers");
+        if (flowers != null && flowers.length() == 6) {
+            for (int i = 0; i < 6; i++) {
+                remainingFlowers[i] = flowers.optInt(i, 0);
+            }
+            setupGameBoard(false);
+        }
+
+        boolean readyA = "a".equals(table.optString("ready_a", "false")) || Boolean.TRUE.equals(table.opt("ready_a"));
+        boolean readyB = "b".equals(table.optString("ready_b", "false")) || Boolean.TRUE.equals(table.opt("ready_b"));
+        String turn = gs.optString("turn", "");
+        JSONArray moves = gs.optJSONArray("moves");
+        int moveCount = moves != null ? moves.length() : 0;
+        if (moveCount != lastRenderedMoveCount
+                || !turn.equals(lastPvpWatcherTurn)
+                || readyA != lastWatcherReadyA
+                || readyB != lastWatcherReadyB) {
+            lastRenderedMoveCount = moveCount;
+            lastPvpWatcherTurn = turn;
+            lastWatcherReadyA = readyA;
+            lastWatcherReadyB = readyB;
+            rebuildPvpWatcherLog(gs, moves, aNick, bNick, readyA, readyB);
+        }
+
+        String gsStatus = gs.optString("status", "");
+        if ("ongoing".equals(gsStatus)) {
+            boolean aTurn = "a".equals(turn);
+            if (imgPlayerFinger != null) {
+                imgPlayerFinger.setVisibility(aTurn ? View.VISIBLE : View.INVISIBLE);
+            }
+            if (imgComputerFinger != null) {
+                imgComputerFinger.setVisibility(aTurn ? View.INVISIBLE : View.VISIBLE);
+            }
+        } else {
+            if (imgPlayerFinger != null) imgPlayerFinger.setVisibility(View.INVISIBLE);
+            if (imgComputerFinger != null) imgComputerFinger.setVisibility(View.INVISIBLE);
+        }
+        hideResultImage();
+    }
+
+    private void rebuildPvpWatcherLog(JSONObject gs, JSONArray moves,
+                                      String aNick, String bNick,
+                                      boolean readyA, boolean readyB) {
+        if (tvGameLog == null) return;
+        StringBuilder sb = new StringBuilder();
+        sb.append("=== 观战：第 ").append(tableNo).append(" 桌 ===\n");
+        sb.append("先手(左)：" ).append(aNick)
+          .append("\n后手(右)：").append(bNick).append("\n\n");
+        String gsStatus = gs.optString("status", "");
+        String turn = gs.optString("turn", "");
+        if (("ongoing").equals(gsStatus)) {
+            if (moves != null && moves.length() > 0) {
+                for (int i = 0; i < moves.length(); i++) {
+                    JSONObject m = moves.optJSONObject(i);
+                    if (m == null) continue;
+                    String side = m.optString("side", "");
+                    if (!"a".equals(side) && !"b".equals(side)) continue;
+                    int row = m.optInt("row", -1);
+                    int count = m.optInt("count", 0);
+                    sb.append(("a".equals(side) ? aNick : bNick))
+                      .append("拿走了第").append(row + 1).append("排的").append(count).append("朵鲜花\n");
+                }
+            }
+            String turnNick = "a".equals(turn) ? aNick : bNick;
+            sb.append("\n系统提示：轮到 ").append(turnNick).append(" 的回合\n");
+        } else if ("finished".equals(gsStatus)) {
+            if (moves != null) {
+                for (int i = 0; i < moves.length(); i++) {
+                    JSONObject m = moves.optJSONObject(i);
+                    if (m == null) continue;
+                    String side = m.optString("side", "");
+                    if (!"a".equals(side) && !"b".equals(side)) continue;
+                    int row = m.optInt("row", -1);
+                    int count = m.optInt("count", 0);
+                    sb.append(("a".equals(side) ? aNick : bNick))
+                      .append("拿走了第").append(row + 1).append("排的").append(count).append("朵鲜花\n");
+                }
+            }
+            String winner = gs.optString("winner", "");
+            if ("a".equals(winner) || "b".equals(winner)) {
+                String wName = "a".equals(winner) ? aNick : bNick;
+                String lName = "a".equals(winner) ? bNick : aNick;
+                sb.append("\n本局结束：").append(wName).append(" 赢，")
+                  .append(lName).append(" 输\n");
+            }
+        } else {
+            sb.append("等待开局...\n");
+            if (readyA) sb.append("系统提示：").append(aNick).append(" 已准备\n");
+            if (readyB) sb.append("系统提示：").append(bNick).append(" 已准备\n");
+        }
+        tvGameLog.setText(sb.toString());
+        if (scrollView != null) {
+            scrollView.post(new Runnable() {
+                @Override
+                public void run() {
+                    scrollView.fullScroll(ScrollView.FOCUS_DOWN);
+                }
+            });
+        }
+    }
+
+    private void setupComputerName(String name) {
+        if (tvComputerName != null) tvComputerName.setText(name);
     }
 
     private void rebuildWatcherLog(JSONObject gs, JSONArray moves) {
@@ -549,6 +934,38 @@ public class LocalGameActivity extends Activity {
         addLog("系统", message);
     }
 
+    // PvP 落子日志：统一用昵称（与观战重放一致，玩家/观众看到同一套）
+    private void logPvpMove(String who, int row, int count) {
+        if (tvGameLog == null) return;
+        tvGameLog.append(who + "拿走了第" + (row + 1)
+            + "排的" + count + "朵鲜花\n");
+        if (scrollView != null) {
+            scrollView.post(new Runnable() {
+                @Override
+                public void run() {
+                    scrollView.fullScroll(ScrollView.FOCUS_DOWN);
+                }
+            });
+        }
+    }
+
+    // 我这一侧的昵称（日志统一用昵称显示）
+    private String pvpMyName() {
+        if ("a".equals(mySide)) {
+            return pvpANick.isEmpty() ? getPlayerName() : pvpANick;
+        } else if ("b".equals(mySide)) {
+            return pvpBNick.isEmpty() ? getPlayerName() : pvpBNick;
+        }
+        return getPlayerName();
+    }
+
+    // 指定 side 的昵称（观战/日志通用）
+    private String pvpNameOf(String side) {
+        return "a".equals(side)
+            ? (pvpANick.isEmpty() ? "等待对手入座..." : pvpANick)
+            : (pvpBNick.isEmpty() ? "等待对手入座..." : pvpBNick);
+    }
+
     private String getPlayerName() {
         return playerName == null || playerName.isEmpty() ? "玩家" : playerName;
     }
@@ -579,6 +996,24 @@ public class LocalGameActivity extends Activity {
     // ===== 对局流程 =====
     private void markPlayerReady() {
         if (isGameStarted) return;
+        if (isPvp) {
+            // 人人：只上报 pvp_ready，不本地开局；开局由轮询发现双方就绪后驱动
+            hideResultImage();
+            btnAction.setEnabled(false);
+            btnAction.setText("已准备，等待对方...");
+            addLog(pvpMyName() + " 已准备");
+            seatManager.pvpReady(tableNo, new SeatManager.ResultCallback() {
+                @Override
+                public void onResult(boolean ok, String message) {
+                    if (!ok) {
+                        addLog("准备失败：" + message);
+                        btnAction.setEnabled(true);
+                        btnAction.setText("准备好了");
+                    }
+                }
+            });
+            return;
+        }
         hideResultImage();
         btnAction.setEnabled(false);
         btnAction.setText("已准备");
@@ -626,14 +1061,35 @@ public class LocalGameActivity extends Activity {
             return;
         }
         playSend();
-        addLog(getPlayerName(), "拿走了第" + (selectedRow + 1) + "排的" + selectedCount + "朵鲜花");
-        appendMove("player", selectedRow, selectedCount);
+        if (isPvp) {
+            // 落子日志统一用昵称（与观战重放一致，玩家/观众同一套）
+            logPvpMove(pvpMyName(), selectedRow, selectedCount);
+        } else {
+            addLog(getPlayerName(), "拿走了第" + (selectedRow + 1) + "排的" + selectedCount + "朵鲜花");
+        }
+        if (isPvp) {
+            appendMove(mySide == null ? "b" : mySide, selectedRow, selectedCount);
+            pvpLogMoveCount = moveList.length(); // 我的这步已本地记录，轮询时跳过
+        } else {
+            appendMove("player", selectedRow, selectedCount);
+        }
         remainingFlowers[selectedRow] -= selectedCount;
 
         if (checkGameEnd()) {
-            addLog("恭喜" + getPlayerName() + "赢了！电脑被迫拿走了牛粪。");
-            reportState("finished", "", "player");
-            endGame(true);
+            if (isPvp) {
+                addLog(pvpMyName() + "拿走了最后一朵鲜花，" + opponentName
+                    + "被迫拿走牛粪，本局结束");
+            } else {
+                addLog("恭喜" + getPlayerName() + "赢了！" + "电脑"
+                    + "被迫拿走了牛粪。");
+            }
+            if (isPvp) {
+                reportPvpState("finished", "", mySide == null ? "a" : mySide);
+                endPvpGame(true);
+            } else {
+                reportState("finished", "", "player");
+                endGame(true);
+            }
             return;
         }
 
@@ -641,6 +1097,13 @@ public class LocalGameActivity extends Activity {
         stopCountdown();
         resetSelectionState();
         setupGameBoard(true);
+        if (isPvp) {
+            reportPvpState("ongoing", "a".equals(mySide) ? "b" : "a", "");
+            btnAction.setEnabled(false);
+            btnAction.setText("对方回合中...");
+            addLog("轮到" + opponentName + "的回合");
+            return;
+        }
         reportState("ongoing", "computer", "");
         btnAction.setEnabled(false);
         btnAction.setText("电脑思考中...");
@@ -774,6 +1237,47 @@ public class LocalGameActivity extends Activity {
         });
     }
 
+    // 人人对局（PvP）整包上报：走 pvp_report_state，side 用 'a'/'b'
+    private void reportPvpState(final String status, final String turn, final String winner) {
+        if (isWatcher || client == null || tableNo == null) return;
+        final JSONObject state = new JSONObject();
+        try {
+            JSONArray flowers = new JSONArray();
+            for (int v : remainingFlowers) flowers.put(v);
+            state.put("flowers", flowers);
+            state.put("turn", turn);
+            state.put("winner", winner);
+            state.put("status", status);
+            JSONArray movesCopy = new JSONArray();
+            for (int i = 0; i < moveList.length(); i++) {
+                movesCopy.put(moveList.get(i));
+            }
+            state.put("moves", movesCopy);
+        } catch (Exception ignore) { }
+        async(new Runnable() {
+            @Override
+            public void run() {
+                client.pvpReportState(tableNo, state);
+            }
+        });
+    }
+
+    // 人人对局结束（本地判定我赢/输后）：显示结果图，回到可再准备；不下方重置棋盘
+    private void endPvpGame(boolean iWon) {
+        isGameStarted = false;
+        stopCountdown();
+        resetSelectionState();
+        setupGameBoard(false);
+        btnAction.setText("准备好了");
+        btnAction.setEnabled(true);
+        if (iWon) {
+            playWin();
+        } else {
+            playLose();
+        }
+        showResultImage(iWon);
+    }
+
     // 后台线程执行，忽略异常
     private void async(Runnable r) {
         if (r == null || client == null || tableNo == null) return;
@@ -859,8 +1363,14 @@ public class LocalGameActivity extends Activity {
         stopCountdown();
         watchHandler.removeCallbacksAndMessages(null);
         seatManager.stopHeartbeat();
-        final JSONObject finalState = buildFinalState();
-        seatManager.forfeitAndLeave(tableNo, finalState, null);
+        if (isPvp) {
+            // 人人桌：退出后服务端自动判对方胜并释放座位
+            seatManager.pvpLeave(tableNo, null);
+            reportPvpState("finished", "", ("a".equals(mySide) ? "b" : "a"));
+        } else {
+            final JSONObject finalState = buildFinalState();
+            seatManager.forfeitAndLeave(tableNo, finalState, null);
+        }
         addLog("你中途退出了棋局，判定为输");
         finish();
     }
@@ -872,7 +1382,13 @@ public class LocalGameActivity extends Activity {
         stopCountdown();
         watchHandler.removeCallbacksAndMessages(null);
         seatManager.stopHeartbeat();
-        if (isWatcher) {
+        if (isPvp) {
+            if (isWatcher) {
+                seatManager.pvpLeaveWatch(tableNo, null);
+            } else {
+                seatManager.pvpLeave(tableNo, null);
+            }
+        } else if (isWatcher) {
             seatManager.leaveWatch(tableNo, null);
         } else {
             seatManager.leaveSeat(tableNo, null);
@@ -922,9 +1438,18 @@ public class LocalGameActivity extends Activity {
                     updateCountdownText(tv);
                     tv.setVisibility(View.INVISIBLE);
                     if (playerSide) {
-                        addLog(getPlayerName() + "的回合超时，判负，电脑赢了。");
-                        reportState("finished", "", "computer");
-                        endGame(false);
+                        if (isPvp) {
+                            final String mySideFinal = mySide;
+                            addLog(pvpMyName() + "的回合超时，判负，"
+                                + pvpNameOf("a".equals(mySideFinal) ? "b" : "a") + " 赢了。");
+                            reportPvpState("finished", "",
+                                ("a".equals(mySideFinal) ? "b" : "a"));
+                            endPvpGame(false);
+                        } else {
+                            addLog(getPlayerName() + "的回合超时，判负，电脑赢了。");
+                            reportState("finished", "", "computer");
+                            endGame(false);
+                        }
                     }
                     return;
                 }
@@ -1122,6 +1647,7 @@ public class LocalGameActivity extends Activity {
     }
 
     private void showTurnHint() {
+        if (isPvp) return; // 人人对局无 AI 提示
         if (!isGameStarted || !isPlayerTurn) {
             return;
         }
@@ -1233,7 +1759,15 @@ public class LocalGameActivity extends Activity {
             seatManager.stopHeartbeat();
             // 遗言机制：进程被清/异常退出，尽力写库释放座位/观战（服务端超时兜底）
             if (tableNo != null && !tableNo.isEmpty() && !leavingTable) {
-                if (!isWatcher && isGameStarted) {
+                if (isPvp) {
+                    if (!isWatcher && isGameStarted) {
+                        seatManager.pvpLeave(tableNo, null); // 对局中退出 -> 服务端判对方胜
+                    } else if (isWatcher) {
+                        seatManager.pvpLeaveWatch(tableNo, null);
+                    } else {
+                        seatManager.pvpLeave(tableNo, null);
+                    }
+                } else if (!isWatcher && isGameStarted) {
                     seatManager.forfeitAndLeave(tableNo, buildFinalState(), null); // 对局中判负
                 } else if (isWatcher) {
                     seatManager.leaveWatch(tableNo, null);
