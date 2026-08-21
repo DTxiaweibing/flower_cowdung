@@ -106,7 +106,7 @@ public class PrivateRoomActivity extends Activity {
         });
         root.addView(table);
 
-        // 底部操作列：返回房间（退出座位但不退出房间）
+        // 底部操作列：退出房间（回初始页；双方都离开后服务端关闭房间并踢出观众）
         LinearLayout bottomBar = new LinearLayout(this);
         bottomBar.setOrientation(LinearLayout.HORIZONTAL);
         bottomBar.setGravity(Gravity.CENTER);
@@ -118,7 +118,7 @@ public class PrivateRoomActivity extends Activity {
         bottomBar.setLayoutParams(barParams);
 
         Button btnLeave = new Button(this);
-        btnLeave.setText("返回房间");
+        btnLeave.setText("退出房间");
         btnLeave.setTextSize(15);
         btnLeave.setTextColor(android.graphics.Color.WHITE);
         btnLeave.setAllCaps(false);
@@ -127,7 +127,7 @@ public class PrivateRoomActivity extends Activity {
         btnLeave.setOnClickListener(new View.OnClickListener() {
             @Override
             public void onClick(View v) {
-                // 直接 finish，返回房间（保持房间状态不变，polling 继续）
+                // 直接 finish，退回初始页（房间状态由服务端管理）
                 finish();
             }
         });

@@ -215,7 +215,7 @@ public class LocalGameActivity extends Activity {
         cell2.addView(tvPlayerCountdown);
 
         btnExitGame = new Button(this);
-        btnExitGame.setText("返回房间");
+        btnExitGame.setText("离开棋局");
         btnExitGame.setTextSize(12);
         btnExitGame.setTextColor(Color.WHITE);
         btnExitGame.setBackground(roundedStrokeBg(0xFFB71C1C));
@@ -1367,8 +1367,8 @@ public class LocalGameActivity extends Activity {
     private void confirmForfeitAndExit() {
         stopCountdown();
         AppDialog.confirm(this,
-            "返回房间",
-            "对局进行中，返回将判负，确定要退出吗？",
+            "离开棋局",
+            "对局进行中，离开将判负，确定要离开吗？",
             "退出并判负", "取消",
             new AppDialog.OnClick() {
                 @Override
