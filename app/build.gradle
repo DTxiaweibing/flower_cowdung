@@ -1,0 +1,32 @@
+apply plugin: 'com.android.application'
+
+android {
+    compileSdkVersion 36
+    namespace "com.example.cowdunggame"
+
+    defaultConfig {
+        applicationId "com.example.cowdunggame"
+        minSdkVersion 28
+        targetSdkVersion 36
+        versionCode 1
+        versionName "1.0"
+    }
+    compileOptions {
+        sourceCompatibility JavaVersion.VERSION_11
+        targetCompatibility JavaVersion.VERSION_11
+    }
+    buildTypes {
+        release {
+            minifyEnabled false
+            proguardFiles getDefaultProguardFile('proguard-android.txt'), 'proguard-rules.pro'
+        }
+    }
+}
+
+dependencies {
+    implementation 'androidx.appcompat:appcompat:1.6.1'
+    implementation 'com.google.android.material:material:1.12.0'
+    implementation fileTree(dir: 'libs', include: ['*.jar'])
+    // 敏感词过滤（同款）：自带中英文词库
+    implementation 'com.github.houbb:sensitive-word:0.29.5'
+}
