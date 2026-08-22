@@ -328,7 +328,10 @@ $$;
 
 -- ============================================================
 -- 6. RPC：pvp_ready（按"准备好了"；双方就绪且都有人 -> 开局）
+--    先后手轮换：第 1 局 A（先入座）先手，之后每局交换（round_no 奇偶）
 -- ============================================================
+alter table public.pvp_tables add column if not exists round_no int not null default 0;
+
 create or replace function public.pvp_ready(tid text)
 returns boolean
 language plpgsql security definer set search_path = public
@@ -337,6 +340,9 @@ declare
   uid  uuid := auth.uid();
   a_id uuid;
   b_id uuid;
+  c_status text;
+  new_round int;
+  first_is_a boolean;
 begin
   if uid is null then
     raise exception 'NOT_AUTHENTICATED';
@@ -352,15 +358,30 @@ begin
     raise exception 'NOT_YOUR_TABLE';
   end if;
 
-  select player_a_id, player_b_id into a_id, b_id from public.pvp_tables where id = tid;
+  select player_a_id, player_b_id, status, round_no
+       into a_id, b_id, c_status, new_round
+  from public.pvp_tables where id = tid;
 
+  -- 双方就绪且不在对局中才允许开局：
+  --   防止对局中重复开局重置棋盘；开局即清 ready，下一局需重新准备
   if a_id is not null and b_id is not null
+     and coalesce(c_status, 'open') <> 'playing'
      and exists (select 1 from public.pvp_tables
                  where id = tid and ready_a and ready_b) then
+    new_round := new_round + 1;
+    first_is_a := (new_round % 2) = 1;
+
     update public.pvp_tables
     set status = 'playing',
-        current_turn_id = a_id,             -- A 先手
-        game_state = '{"turn":"a","status":"ongoing","flowers":[1,2,3,4,5,6],"moves":[]}'::jsonb,
+        round_no = new_round,
+        current_turn_id = case when first_is_a then a_id else b_id end,
+        game_state = jsonb_build_object(
+          'turn', case when first_is_a then 'a' else 'b' end,
+          'status', 'ongoing',
+          'flowers', '[1,2,3,4,5,6]'::jsonb,
+          'moves', '[]'::jsonb),
+        ready_a = false,
+        ready_b = false,
         last_active_at = now()
     where id = tid;
   end if;
@@ -435,6 +456,8 @@ begin
         else null
       end,
       status = case when st_status = 'finished' then 'seated' else 'playing' end,
+      ready_a = case when st_status = 'finished' then false else ready_a end,
+      ready_b = case when st_status = 'finished' then false else ready_b end,
       last_active_at = now()
   where id = tid;
 

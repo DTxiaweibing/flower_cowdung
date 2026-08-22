@@ -437,9 +437,9 @@ public class LocalGameActivity extends Activity {
         setupGameBoard(false);
         showPvpRules();
         if (isRoom) {
-            addLog("私密房间 #" + tableNo + "：点「准备好了」，等对方也准备好后开局（左边先手）");
+            addLog("私密房间 #" + tableNo + "：点「准备好了」，双方就绪开局（首局左边先手，之后每局交换）");
         } else {
-            addLog("人人对局：坐下即对战。点「准备好了」，等对方也准备好后开局（左边先手）");
+            addLog("人人对局：坐下即对战。点「准备好了」，双方就绪开局（首局左边先手，之后每局交换）");
         }
         startPvpPolling();
     }
@@ -448,7 +448,7 @@ public class LocalGameActivity extends Activity {
         if (tvGameLog != null) tvGameLog.setText("");
         String[] rules = {
             "=== 鲜花与牛粪（人人对战）===",
-            "1. 左座先手，双方轮流从任意一排拿走任意数量鲜花",
+            "1. 首局先入座者（左）先手，之后每局交换先后手，双方轮流拿花",
             "2. 不能拿牛粪，只能拿鲜花",
             "3. 被迫拿走牛粪的玩家输掉游戏",
             "操作：",
@@ -554,6 +554,12 @@ public class LocalGameActivity extends Activity {
                 isGameStarted = true;
                 pvpStarted = true;
                 gameCount++;
+                // 新一局必须重置：否则第二局结束时因 pvpResultShown 已为 true
+                // 不再显示结果、按钮卡在"对方回合中"，游戏无法继续
+                pvpResultShown = false;
+                pvpLogMoveCount = 0;
+                moveList = new JSONArray();
+                hideResultImage();
                 // 从数据库还原棋盘（开局 1..6）
                 JSONArray flowers = gs.optJSONArray("flowers");
                 if (flowers != null && flowers.length() == 6) {
@@ -637,7 +643,7 @@ public class LocalGameActivity extends Activity {
         if (moves == null) return;
         StringBuilder sb = new StringBuilder();
         sb.append("=== 第 ").append(tableNo).append(" 桌 对局记录 ===\n");
-        sb.append("左座：").append(pvpNameOf("a")).append("　右座：").append(pvpNameOf("b")).append("\n\n");
+        sb.append("先入座(A)：").append(pvpNameOf("a")).append("　后入座(B)：").append(pvpNameOf("b")).append("\n\n");
         for (int i = 0; i < moves.length(); i++) {
             JSONObject m = moves.optJSONObject(i);
             if (m == null) continue;
@@ -774,10 +780,19 @@ public class LocalGameActivity extends Activity {
     private void renderPvpWatcherState(JSONObject table) {
         JSONObject a = table.optJSONObject("player_a");
         JSONObject b = table.optJSONObject("player_b");
+
+        // 双方玩家都已离场 -> 服务端已清空本桌观众，自动退回上一页（房间页/大厅）
+        if (a == null && b == null) {
+            android.widget.Toast.makeText(this, "双方玩家已离开，观战结束",
+                android.widget.Toast.LENGTH_LONG).show();
+            finish();
+            return;
+        }
+
         String aNick = a != null ? a.optString("nickname", "") : "";
         String bNick = b != null ? b.optString("nickname", "") : "";
-        if (aNick.isEmpty()) aNick = "先手未入座";
-        if (bNick.isEmpty()) bNick = "后手未入座";
+        if (aNick.isEmpty()) aNick = "先入座空";
+        if (bNick.isEmpty()) bNick = "后入座空";
         tvPlayerName.setText(aNick);
         setupComputerName(bNick);
 
@@ -830,8 +845,8 @@ public class LocalGameActivity extends Activity {
         if (tvGameLog == null) return;
         StringBuilder sb = new StringBuilder();
         sb.append("=== 观战：第 ").append(tableNo).append(" 桌 ===\n");
-        sb.append("先手(左)：" ).append(aNick)
-          .append("\n后手(右)：").append(bNick).append("\n\n");
+        sb.append("A·先入座：" ).append(aNick)
+          .append("\nB·后入座：").append(bNick).append("\n\n");
         String gsStatus = gs.optString("status", "");
         String turn = gs.optString("turn", "");
         if (("ongoing").equals(gsStatus)) {

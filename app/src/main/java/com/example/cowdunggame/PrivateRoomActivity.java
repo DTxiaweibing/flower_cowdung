@@ -219,8 +219,8 @@ public class PrivateRoomActivity extends Activity {
 
         table.setState(playing, hasA, hasB, watchers > 0,
             leftMale, rightMale, false);
-        if (hasA) table.setPlayerLabel(aNick.isEmpty() ? "左座" : aNick);
-        if (hasB) table.setRightPlayerLabel(bNick.isEmpty() ? "右座" : bNick);
+        if (hasA) table.setPlayerLabel(aNick.isEmpty() ? "先入座" : aNick);
+        if (hasB) table.setRightPlayerLabel(bNick.isEmpty() ? "后入座" : bNick);
 
         // 状态文字
         String status;
@@ -361,8 +361,8 @@ public class PrivateRoomActivity extends Activity {
         intent.putExtra("source", "room");
         intent.putExtra("room_code", roomCode);
         intent.putExtra("role", role);
+        // 不 finish：保留房间页在返回栈，棋局内「离开棋局」/观战被踢时自动回到这里
         startActivity(intent);
-        finish();
     }
 
     @Override

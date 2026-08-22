@@ -158,8 +158,8 @@ public class PvPLobbyActivity extends Activity {
 
         table.setState(playing, hasA, hasB, watchers > 0,
             leftMale, rightMale, false); // PvP 右侧也是真人，非 AIBOT
-        if (hasA) table.setPlayerLabel(aNick.isEmpty() ? "左座" : aNick);
-        if (hasB) table.setRightPlayerLabel(bNick.isEmpty() ? "右座" : bNick);
+        if (hasA) table.setPlayerLabel(aNick.isEmpty() ? "先入座" : aNick);
+        if (hasB) table.setRightPlayerLabel(bNick.isEmpty() ? "后入座" : bNick);
 
         table.setOnClickListener(new View.OnClickListener() {
             @Override
