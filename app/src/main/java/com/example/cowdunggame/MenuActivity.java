@@ -1,5 +1,5 @@
 // MenuActivity.java (app-new 精简版)
-// 登录后的主菜单。已实现入口：人机游戏大厅 / 人人游戏大厅 / 私人房间。
+// 登录后的主菜单。已实现入口：人机游戏大厅 / 人人游戏大厅 / 私密房间。
 //   底部：注销登录。
 package com.example.cowdunggame;
 
@@ -71,7 +71,7 @@ public class MenuActivity extends Activity {
             }
         });
 
-        addMenuButton(menu, "私人房间", new View.OnClickListener() {
+        addMenuButton(menu, "私密房间", new View.OnClickListener() {
             @Override
             public void onClick(View v) {
                 showPrivateRoomDialog();
@@ -127,10 +127,10 @@ public class MenuActivity extends Activity {
     }
 
     // ============================================================
-    // 私人房间：创建 / 加入
+    // 私密房间：创建 / 加入
     // ============================================================
     private void showPrivateRoomDialog() {
-        AppDialog.confirm(this, "私人房间",
+        AppDialog.confirm(this, "私密房间",
             "创建一个新房间，或输入好友的 4 位房间号加入。\n\n创建后房间号会显示在房间页面，把号码发给好友即可对战。",
             "创建房间", "加入房间",
             new AppDialog.OnClick() {

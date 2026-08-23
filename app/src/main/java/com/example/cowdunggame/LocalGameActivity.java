@@ -532,11 +532,11 @@ public class LocalGameActivity extends Activity {
                 stopCountdown();
                 btnAction.setEnabled(true);
                 btnAction.setText("准备好了");
-                tvGameLog.setText("");
-                rebuildPvpLog(gs, winner);
+                // 保留对局过程日志，仅追加本局结果
                 if ("a".equals(winner) || "b".equals(winner)) {
                     addLog(iWon ? "你赢了！" : "你输了，" + opponentName + " 赢了");
                 }
+                addLog("本局结束，点「准备好了」再来一局");
                 if (iWon) {
                     playWin();
                     showResultImage(true);
@@ -586,6 +586,7 @@ public class LocalGameActivity extends Activity {
                 // 增量补记对方落子：日志与观战重放一致（我的落子已在 takeFlowers 记录于计数内）
                 JSONArray gsMoves = gs.optJSONArray("moves");
                 if (gsMoves != null && gsMoves.length() > pvpLogMoveCount) {
+                    boolean opponentMoved = false;
                     for (int i = pvpLogMoveCount; i < gsMoves.length(); i++) {
                         JSONObject m = gsMoves.optJSONObject(i);
                         if (m == null) continue;
@@ -594,8 +595,10 @@ public class LocalGameActivity extends Activity {
                         int count = m.optInt("count", 0);
                         if (!"a".equals(side) && !"b".equals(side)) continue;
                         logPvpMove(pvpNameOf(side), row, count);
+                        if (mySide != null && !side.equals(mySide)) opponentMoved = true;
                     }
                     pvpLogMoveCount = gsMoves.length();
+                    if (opponentMoved) playSend();
                 }
                 boolean myTurnNow = mySide != null && mySide.equals(turn);
                 if (myTurnNow != isPlayerTurn) {
