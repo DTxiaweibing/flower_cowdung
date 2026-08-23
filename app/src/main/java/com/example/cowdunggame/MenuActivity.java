@@ -61,55 +61,44 @@ public class MenuActivity extends Activity {
         title.setLayoutParams(titleParams);
         root.addView(title);
 
-        LinearLayout menu = new LinearLayout(this);
-        menu.setOrientation(LinearLayout.VERTICAL);
-        menu.setGravity(Gravity.CENTER_HORIZONTAL);
-        int menuW = (int) (screenW * 0.72f);
-        FrameLayout.LayoutParams menuParams = new FrameLayout.LayoutParams(
-            menuW, LinearLayout.LayoutParams.WRAP_CONTENT);
-        menuParams.gravity = Gravity.CENTER;
-        menu.setLayoutParams(menuParams);
+        // 底部按钮列：三个入口 + 注销，统一样式（同原注销按钮），全部沉底
+        LinearLayout bottomMenu = new LinearLayout(this);
+        bottomMenu.setOrientation(LinearLayout.VERTICAL);
+        bottomMenu.setGravity(Gravity.CENTER_HORIZONTAL);
+        FrameLayout.LayoutParams bmParams = new FrameLayout.LayoutParams(
+            FrameLayout.LayoutParams.WRAP_CONTENT, FrameLayout.LayoutParams.WRAP_CONTENT);
+        bmParams.gravity = Gravity.BOTTOM | Gravity.CENTER_HORIZONTAL;
+        bmParams.bottomMargin = (int) (screenH * 0.03f);
+        bottomMenu.setLayoutParams(bmParams);
 
-        addMenuButton(menu, "人机游戏大厅", new View.OnClickListener() {
+        addMenuButton(bottomMenu, "人机游戏大厅", new View.OnClickListener() {
             @Override
             public void onClick(View v) {
                 startActivity(new Intent(MenuActivity.this, PvELobbyActivity.class));
             }
         });
 
-        addMenuButton(menu, "人人游戏大厅", new View.OnClickListener() {
+        addMenuButton(bottomMenu, "人人游戏大厅", new View.OnClickListener() {
             @Override
             public void onClick(View v) {
                 startActivity(new Intent(MenuActivity.this, PvPLobbyActivity.class));
             }
         });
 
-        addMenuButton(menu, "私密房间", new View.OnClickListener() {
+        addMenuButton(bottomMenu, "私密房间", new View.OnClickListener() {
             @Override
             public void onClick(View v) {
                 showPrivateRoomDialog();
             }
         });
-        root.addView(menu);
 
-        Button btnLogout = new Button(this);
-        btnLogout.setText("注销登录");
-        btnLogout.setTextSize(14);
-        btnLogout.setTextColor(Color.WHITE);
-        btnLogout.setAllCaps(false);
-        btnLogout.setBackground(btnBg());
-        FrameLayout.LayoutParams lp = new FrameLayout.LayoutParams(
-            (int) (screenW * 0.4f), dp(44));
-        lp.gravity = Gravity.BOTTOM | Gravity.CENTER_HORIZONTAL;
-        lp.bottomMargin = (int) (screenH * 0.06f);
-        btnLogout.setLayoutParams(lp);
-        btnLogout.setOnClickListener(new View.OnClickListener() {
+        addMenuButton(bottomMenu, "注销登录", new View.OnClickListener() {
             @Override
             public void onClick(View v) {
                 confirmLogout();
             }
         });
-        root.addView(btnLogout);
+        root.addView(bottomMenu);
 
         setContentView(root);
 
@@ -127,13 +116,13 @@ public class MenuActivity extends Activity {
     private void addMenuButton(LinearLayout container, final String label, View.OnClickListener click) {
         Button b = new Button(this);
         b.setText(label);
-        b.setTextSize(20);
+        b.setTextSize(14);
         b.setTextColor(Color.WHITE);
         b.setAllCaps(false);
         b.setBackground(btnBg());
         LinearLayout.LayoutParams bp = new LinearLayout.LayoutParams(
-            LinearLayout.LayoutParams.MATCH_PARENT, dp(58));
-        if (container.getChildCount() > 0) bp.topMargin = dp(16);
+            (int) (getResources().getDisplayMetrics().widthPixels * 0.4f), dp(44));
+        if (container.getChildCount() > 0) bp.topMargin = dp(10);
         b.setLayoutParams(bp);
         b.setOnClickListener(click);
         container.addView(b);
