@@ -36,6 +36,19 @@ public class MenuActivity extends Activity {
             FrameLayout.LayoutParams.MATCH_PARENT, FrameLayout.LayoutParams.MATCH_PARENT));
         root.addView(floor);
 
+        // 初始场景：与私密房间同款大桌卡，复用 GameTableView。
+        // 游戏中的桌面（table_playing），左座男、右座女、上下观众满员，纯装饰不可点。
+        float density = getResources().getDisplayMetrics().density;
+        GameTableView.LayoutInfo sceneLayout =
+            GameTableView.computeLayout(screenW, screenH, density, 1);
+        GameTableView sceneTable = new GameTableView(this, sceneLayout);
+        FrameLayout.LayoutParams sceneParams = new FrameLayout.LayoutParams(
+            sceneLayout.cardSidePx, sceneLayout.cardSidePx);
+        sceneParams.gravity = Gravity.CENTER;
+        sceneTable.setLayoutParams(sceneParams);
+        sceneTable.setState(true, true, true, true, true, false, false);
+        root.addView(sceneTable);
+
         TextView title = new TextView(this);
         title.setText("鲜花与牛粪");
         title.setTextSize(24);
