@@ -30,6 +30,10 @@ import android.widget.ScrollView;
 import android.widget.TextView;
 import android.widget.Toast;
 
+import android.app.AlertDialog;
+import java.util.ArrayList;
+import java.util.List;
+
 import org.json.JSONArray;
 import org.json.JSONObject;
 
@@ -61,6 +65,7 @@ public class LocalGameActivity extends Activity {
     private SupabaseClient client;
     private SeatManager seatManager;
     private String tableNo;
+    private String roomCode;
     private boolean leavingTable = false; // 防止返回键重复触发离桌
 
     // 观战模式：真实玩家信息（从数据库拉取，替代本地昵称）
@@ -132,7 +137,7 @@ public class LocalGameActivity extends Activity {
             tableNo = intent.getStringExtra("table_no");
             if (tableNo == null) tableNo = String.valueOf(intent.getIntExtra("table_no", 0));
         }
-        String roomCode = getIntent() != null ? getIntent().getStringExtra("room_code") : null;
+        roomCode = getIntent() != null ? getIntent().getStringExtra("room_code") : null;
         String role = getIntent() != null ? getIntent().getStringExtra("role") : null;
         String source = getIntent() != null ? getIntent().getStringExtra("source") : null;
         isPvp = "pvp".equals(source);
@@ -327,11 +332,36 @@ public class LocalGameActivity extends Activity {
         logParams.setMargins(20, 0, 20, 0);
         logLayout.setLayoutParams(logParams);
 
+        LinearLayout logHeader = new LinearLayout(this);
+        logHeader.setOrientation(LinearLayout.HORIZONTAL);
+        logHeader.setGravity(Gravity.CENTER_VERTICAL);
+        logHeader.setLayoutParams(new LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT));
+
         TextView logTitle = new TextView(this);
         logTitle.setText("游戏日志");
         logTitle.setTextSize(16);
         logTitle.setTextColor(Color.WHITE);
-        logLayout.addView(logTitle);
+        logTitle.setLayoutParams(new LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f));
+        logHeader.addView(logTitle);
+
+        Button btnWatchers = new Button(this);
+        btnWatchers.setText("观众列表");
+        btnWatchers.setTextSize(12);
+        btnWatchers.setAllCaps(false);
+        btnWatchers.setTextColor(Color.WHITE);
+        btnWatchers.setBackground(roundedStrokeBg(0xFF2D2D2D));
+        btnWatchers.setLayoutParams(new LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.WRAP_CONTENT, LinearLayout.LayoutParams.WRAP_CONTENT));
+        btnWatchers.setOnClickListener(new View.OnClickListener() {
+            @Override
+            public void onClick(View v) {
+                showWatcherList();
+            }
+        });
+        logHeader.addView(btnWatchers);
+
+        logLayout.addView(logHeader);
 
         scrollView = new ScrollView(this);
         scrollView.setBackgroundColor(Color.BLACK);
@@ -1329,6 +1359,44 @@ public class LocalGameActivity extends Activity {
             playLose();
         }
         showResultImage(iWon);
+    }
+
+    // 拉取并展示当前桌的观众昵称（仅观众，不含玩家）
+    private void showWatcherList() {
+        if (client == null || tableNo == null) return;
+        final String mode = isRoom ? "room" : (isPvp ? "pvp" : "pve");
+        final String idOrCode = isRoom ? roomCode : tableNo;
+        if (idOrCode == null || idOrCode.isEmpty()) return;
+        async(new Runnable() {
+            @Override
+            public void run() {
+                final List<String> names = client.fetchWatcherNicknames(mode, idOrCode);
+                runOnUiThread(new Runnable() {
+                    @Override
+                    public void run() {
+                        showWatcherListDialog(names);
+                    }
+                });
+            }
+        });
+    }
+
+    private void showWatcherListDialog(List<String> names) {
+        if (names == null) names = new ArrayList<>();
+        StringBuilder sb = new StringBuilder();
+        sb.append("当前观众（").append(names.size()).append(" 人）");
+        if (names.isEmpty()) {
+            sb.append("\n暂无观众");
+        } else {
+            for (String n : names) {
+                sb.append("\n· ").append(n);
+            }
+        }
+        new AlertDialog.Builder(LocalGameActivity.this)
+                .setTitle("观众列表")
+                .setMessage(sb.toString())
+                .setPositiveButton("关闭", null)
+                .show();
     }
 
     // 后台线程执行，忽略异常

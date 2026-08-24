@@ -17,6 +17,8 @@ import java.io.OutputStream;
 import java.net.HttpURLConnection;
 import java.net.URL;
 import java.nio.charset.StandardCharsets;
+import java.util.ArrayList;
+import java.util.List;
 
 public class SupabaseClient {
 
@@ -472,6 +474,80 @@ public class SupabaseClient {
             args.put("state", state);
         } catch (Exception ignore) { }
         return rpc("pvp_report_state", args).ok;
+    }
+
+    // 取某桌「仅观众」的昵称列表（绝不返回玩家）。
+    //   mode="pvp" -> pvp_watchers(table_id)
+    //   mode="pve" -> pve_watchers(table_id)
+    //   mode="room"-> room_members(room_code, role='watcher')
+    // watchers 表/角色过滤本身只含观众，玩家不会进入结果。
+    // 失败（无网/未登录/RLS）返回空列表。
+    public List<String> fetchWatcherNicknames(String mode, String idOrCode) {
+        List<String> result = new ArrayList<>();
+        if (idOrCode == null || idOrCode.isEmpty()) return result;
+        if (!ensureFreshToken() || accessToken == null) return result;
+        try {
+            String table;
+            String filter;
+            if ("room".equals(mode)) {
+                table = "room_members";
+                filter = "room_code=eq." + idOrCode + "&role=eq.watcher";
+            } else if ("pve".equals(mode)) {
+                table = "pve_watchers";
+                filter = "table_id=eq." + idOrCode;
+            } else {
+                table = "pvp_watchers";
+                filter = "table_id=eq." + idOrCode;
+            }
+            JSONArray watchers = getArray(PROJECT_URL + "/rest/v1/" + table
+                    + "?select=user_id&" + filter);
+            if (watchers == null || watchers.length() == 0) return result;
+            List<String> ids = new ArrayList<>();
+            for (int i = 0; i < watchers.length(); i++) {
+                JSONObject o = watchers.optJSONObject(i);
+                if (o == null) continue;
+                String uid = o.optString("user_id", null);
+                if (uid != null && !uid.isEmpty()) ids.add(uid);
+            }
+            if (ids.isEmpty()) return result;
+            StringBuilder inIds = new StringBuilder();
+            for (int i = 0; i < ids.size(); i++) {
+                if (i > 0) inIds.append(",");
+                inIds.append(ids.get(i));
+            }
+            JSONArray profs = getArray(PROJECT_URL + "/rest/v1/profiles"
+                    + "?select=nickname&id=in.(" + inIds + ")");
+            if (profs != null) {
+                for (int i = 0; i < profs.length(); i++) {
+                    JSONObject o = profs.optJSONObject(i);
+                    if (o == null) continue;
+                    String nick = o.optString("nickname", "").trim();
+                    if (!nick.isEmpty()) result.add(nick);
+                }
+            }
+        } catch (Exception ignore) {
+        }
+        return result;
+    }
+
+    private JSONArray getArray(String urlStr) {
+        try {
+            URL url = new URL(urlStr);
+            HttpURLConnection conn = (HttpURLConnection) url.openConnection();
+            conn.setRequestMethod("GET");
+            conn.setRequestProperty("apikey", ANON_KEY);
+            conn.setRequestProperty("Authorization", "Bearer " + accessToken);
+            conn.setConnectTimeout(15000);
+            conn.setReadTimeout(20000);
+            int code = conn.getResponseCode();
+            String text = read(conn);
+            conn.disconnect();
+            if (code >= 200 && code < 300 && text.trim().startsWith("[")) {
+                return new JSONArray(text);
+            }
+        } catch (Exception ignore) {
+        }
+        return null;
     }
 
     // 坐下当玩家：优先坐 A 位（左座 / 先手）；若 A 已有人则坐 B 位（右座 / 后手）
