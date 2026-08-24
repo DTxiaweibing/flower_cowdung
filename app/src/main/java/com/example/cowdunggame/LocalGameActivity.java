@@ -526,6 +526,15 @@ public class LocalGameActivity extends Activity {
             // 胜负已定：winner 'a'/'b'
             String winner = gs.optString("winner", "");
             boolean iWon = winner.equals(mySide);
+            // 先按最终棋盘重绘：把最后一手（拿花）同步到本地，
+            // 否则被动方（输家）屏幕停在对手最后一手之前，鲜花没被拿走却已显示输图标
+            JSONArray endFlowers = gs.optJSONArray("flowers");
+            if (endFlowers != null && endFlowers.length() == 6) {
+                for (int i = 0; i < 6; i++) {
+                    remainingFlowers[i] = endFlowers.optInt(i, 0);
+                }
+            }
+            setupGameBoard(false);
             if (!pvpResultShown) {
                 pvpResultShown = true;
                 isGameStarted = false;
