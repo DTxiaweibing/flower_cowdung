@@ -26,6 +26,7 @@ import android.widget.EditText;
 import android.widget.FrameLayout;
 import android.widget.ImageView;
 import android.widget.LinearLayout;
+import android.widget.PopupWindow;
 import android.widget.ScrollView;
 import android.widget.TextView;
 import android.widget.Toast;
@@ -66,6 +67,7 @@ public class LocalGameActivity extends Activity {
     private SeatManager seatManager;
     private String tableNo;
     private String roomCode;
+    private LinearLayout logLayout;
     private boolean leavingTable = false; // 防止返回键重复触发离桌
 
     // 观战模式：真实玩家信息（从数据库拉取，替代本地昵称）
@@ -324,7 +326,7 @@ public class LocalGameActivity extends Activity {
         tvComputerName.setLayoutParams(name5Params);
         buttonLayout.addView(tvComputerName);
 
-        LinearLayout logLayout = new LinearLayout(this);
+        logLayout = new LinearLayout(this);
         logLayout.setOrientation(LinearLayout.VERTICAL);
         logLayout.setBackgroundColor(Color.BLACK);
         LinearLayout.LayoutParams logParams = new LinearLayout.LayoutParams(
@@ -347,10 +349,10 @@ public class LocalGameActivity extends Activity {
 
         Button btnWatchers = new Button(this);
         btnWatchers.setText("观众列表");
-        btnWatchers.setTextSize(12);
+        btnWatchers.setTextSize(16);
         btnWatchers.setAllCaps(false);
         btnWatchers.setTextColor(Color.WHITE);
-        btnWatchers.setBackground(roundedStrokeBg(0xFF2D2D2D));
+        btnWatchers.setBackground(null);
         btnWatchers.setLayoutParams(new LinearLayout.LayoutParams(
                 LinearLayout.LayoutParams.WRAP_CONTENT, LinearLayout.LayoutParams.WRAP_CONTENT));
         btnWatchers.setOnClickListener(new View.OnClickListener() {
@@ -1381,22 +1383,69 @@ public class LocalGameActivity extends Activity {
         });
     }
 
+    // 观众列表弹窗：白底黑字、圆角、宽=屏宽1/2；悬浮在游戏日志区域内，
+    // 通过计算日志区在屏幕中的位置与高度权重来定位，绝不遮挡下方操作按钮。
     private void showWatcherListDialog(List<String> names) {
         if (names == null) names = new ArrayList<>();
+        final int screenW = getResources().getDisplayMetrics().widthPixels;
+        final int popupW = screenW / 2;
+
+        TextView title = new TextView(this);
+        title.setText("观众列表（" + names.size() + " 人）");
+        title.setTextSize(16);
+        title.setTextColor(Color.BLACK);
+        title.setPadding(dp(16), dp(12), dp(16), 0);
+
+        TextView body = new TextView(this);
         StringBuilder sb = new StringBuilder();
-        sb.append("当前观众（").append(names.size()).append(" 人）");
         if (names.isEmpty()) {
-            sb.append("\n暂无观众");
+            sb.append("暂无观众");
         } else {
             for (String n : names) {
-                sb.append("\n· ").append(n);
+                sb.append("· ").append(n).append("\n");
             }
         }
-        new AlertDialog.Builder(LocalGameActivity.this)
-                .setTitle("观众列表")
-                .setMessage(sb.toString())
-                .setPositiveButton("关闭", null)
-                .show();
+        body.setText(sb.toString().trim());
+        body.setTextSize(14);
+        body.setTextColor(Color.BLACK);
+        body.setPadding(dp(16), dp(8), dp(16), dp(12));
+
+        LinearLayout content = new LinearLayout(this);
+        content.setOrientation(LinearLayout.VERTICAL);
+        GradientDrawable bg = new GradientDrawable();
+        bg.setColor(Color.WHITE);
+        bg.setCornerRadius(dp(12));
+        content.setBackground(bg);
+        content.addView(title);
+        content.addView(body);
+
+        ScrollView sv = new ScrollView(this);
+        sv.addView(content);
+
+        // 先测量内容高度，限制弹窗不超过日志区域高度（超出则内部滚动）
+        content.measure(View.MeasureSpec.UNSPECIFIED, View.MeasureSpec.UNSPECIFIED);
+        int desiredH = content.getMeasuredHeight();
+        int maxAllowed = (logLayout != null && logLayout.getHeight() > 0)
+                ? logLayout.getHeight() : ViewGroup.LayoutParams.WRAP_CONTENT;
+        int popupH = (maxAllowed != ViewGroup.LayoutParams.WRAP_CONTENT)
+                ? Math.min(desiredH, maxAllowed) : desiredH;
+
+        final PopupWindow popup = new PopupWindow(sv, popupW, popupH, true);
+        popup.setOutsideTouchable(true);
+        popup.setFocusable(true);
+        popup.setElevation(dp(8));
+
+        if (logLayout != null) {
+            int[] loc = new int[2];
+            logLayout.getLocationOnScreen(loc);
+            int logW = logLayout.getWidth();
+            int x = loc[0] + (logW - popupW) / 2;
+            int y = loc[1];
+            popup.showAtLocation(logLayout, Gravity.TOP | Gravity.LEFT, x, y);
+        } else {
+            popup.showAtLocation(findViewById(android.R.id.content),
+                    Gravity.TOP | Gravity.LEFT, popupW / 2, dp(80));
+        }
     }
 
     // 后台线程执行，忽略异常
