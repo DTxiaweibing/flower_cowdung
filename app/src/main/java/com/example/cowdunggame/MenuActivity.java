@@ -61,43 +61,53 @@ public class MenuActivity extends Activity {
         title.setLayoutParams(titleParams);
         root.addView(title);
 
-        // 底部按钮列：三个入口 + 注销，统一样式（同原注销按钮），全部沉底
+        // 底部按钮：2×2 网格，尺寸/间距全部按屏幕比例用权重分配，保证各设备位置基本一致
+        final int menuW = (int) (screenW * 0.92f);
+        final int menuH = (int) (screenH * 0.20f);   // 两行按钮约占屏高 20%
+        final int gap = (int) (screenW * 0.03f);     // 行/列间距随屏宽等比
+
         LinearLayout bottomMenu = new LinearLayout(this);
         bottomMenu.setOrientation(LinearLayout.VERTICAL);
         bottomMenu.setGravity(Gravity.CENTER_HORIZONTAL);
-        FrameLayout.LayoutParams bmParams = new FrameLayout.LayoutParams(
-            FrameLayout.LayoutParams.WRAP_CONTENT, FrameLayout.LayoutParams.WRAP_CONTENT);
+        bottomMenu.setWeightSum(2f);
+        FrameLayout.LayoutParams bmParams = new FrameLayout.LayoutParams(menuW, menuH);
         bmParams.gravity = Gravity.BOTTOM | Gravity.CENTER_HORIZONTAL;
         bmParams.bottomMargin = (int) (screenH * 0.03f);
         bottomMenu.setLayoutParams(bmParams);
 
-        addMenuButton(bottomMenu, "人机游戏大厅", new View.OnClickListener() {
+        LinearLayout row1 = newMenuRow(gap, false);
+        LinearLayout row2 = newMenuRow(gap, true);
+
+        addMenuButton(row1, "人机游戏大厅", new View.OnClickListener() {
             @Override
             public void onClick(View v) {
                 startActivity(new Intent(MenuActivity.this, PvELobbyActivity.class));
             }
-        });
+        }, gap);
 
-        addMenuButton(bottomMenu, "人人游戏大厅", new View.OnClickListener() {
+        addMenuButton(row1, "人人游戏大厅", new View.OnClickListener() {
             @Override
             public void onClick(View v) {
                 startActivity(new Intent(MenuActivity.this, PvPLobbyActivity.class));
             }
-        });
+        }, gap);
 
-        addMenuButton(bottomMenu, "私密房间", new View.OnClickListener() {
+        addMenuButton(row2, "私密房间", new View.OnClickListener() {
             @Override
             public void onClick(View v) {
                 showPrivateRoomDialog();
             }
-        });
+        }, gap);
 
-        addMenuButton(bottomMenu, "注销登录", new View.OnClickListener() {
+        addMenuButton(row2, "注销登录", new View.OnClickListener() {
             @Override
             public void onClick(View v) {
                 confirmLogout();
             }
-        });
+        }, gap);
+
+        bottomMenu.addView(row1);
+        bottomMenu.addView(row2);
         root.addView(bottomMenu);
 
         setContentView(root);
@@ -113,7 +123,23 @@ public class MenuActivity extends Activity {
         }
     }
 
-    private void addMenuButton(LinearLayout container, final String label, View.OnClickListener click) {
+    // 一行（横向）按钮容器：两列等权（weightSum=2），行高由父容器权重分配
+    private LinearLayout newMenuRow(int gap, boolean withTopGap) {
+        LinearLayout row = new LinearLayout(this);
+        row.setOrientation(LinearLayout.HORIZONTAL);
+        row.setGravity(Gravity.CENTER);
+        row.setWeightSum(2f);
+        LinearLayout.LayoutParams rp = new LinearLayout.LayoutParams(
+            LinearLayout.LayoutParams.MATCH_PARENT, 0, 1f);
+        if (withTopGap) rp.topMargin = gap;
+        row.setLayoutParams(rp);
+        return row;
+    }
+
+    // 单个按钮：宽度 0dp + weight=1（占行宽一半），高度 MATCH_PARENT（撑满行高），
+    // 尺寸完全由权重和屏幕比例推导，不写死 dp。
+    private void addMenuButton(LinearLayout container, final String label,
+                               View.OnClickListener click, int gap) {
         Button b = new Button(this);
         b.setText(label);
         b.setTextSize(14);
@@ -121,8 +147,8 @@ public class MenuActivity extends Activity {
         b.setAllCaps(false);
         b.setBackground(btnBg());
         LinearLayout.LayoutParams bp = new LinearLayout.LayoutParams(
-            (int) (getResources().getDisplayMetrics().widthPixels * 0.4f), dp(44));
-        if (container.getChildCount() > 0) bp.topMargin = dp(10);
+            0, LinearLayout.LayoutParams.MATCH_PARENT, 1f);
+        if (container.getChildCount() > 0) bp.leftMargin = gap;
         b.setLayoutParams(bp);
         b.setOnClickListener(click);
         container.addView(b);
