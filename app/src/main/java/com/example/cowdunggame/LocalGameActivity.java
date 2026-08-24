@@ -526,21 +526,24 @@ public class LocalGameActivity extends Activity {
             // 胜负已定：winner 'a'/'b'
             String winner = gs.optString("winner", "");
             boolean iWon = winner.equals(mySide);
-            // 先按最终棋盘重绘：把最后一手（拿花）同步到本地，
-            // 否则被动方（输家）屏幕停在对手最后一手之前，鲜花没被拿走却已显示输图标
-            JSONArray endFlowers = gs.optJSONArray("flowers");
-            if (endFlowers != null && endFlowers.length() == 6) {
-                for (int i = 0; i < 6; i++) {
-                    remainingFlowers[i] = endFlowers.optInt(i, 0);
-                }
-            }
-            setupGameBoard(false);
             if (!pvpResultShown) {
                 pvpResultShown = true;
                 isGameStarted = false;
                 stopCountdown();
                 btnAction.setEnabled(true);
                 btnAction.setText("准备好了");
+                // 先按最终棋盘重绘：把最后一手（拿花）同步到本地，
+                // 否则被动方（输家）屏幕停在对手最后一手之前，鲜花没被拿走却已显示输图标
+                JSONArray endFlowers = gs.optJSONArray("flowers");
+                if (endFlowers != null && endFlowers.length() == 6) {
+                    for (int i = 0; i < 6; i++) {
+                        remainingFlowers[i] = endFlowers.optInt(i, 0);
+                    }
+                }
+                // 重绘必须放在 showResultImage 之前且只执行一次：
+                // setupGameBoard 会 removeAllViews 清掉 rowsContainer，
+                // 若每次轮询都执行会把胜负图标一起清掉（图标应保留到「准备好了」）
+                setupGameBoard(false);
                 // 保留对局过程日志，仅追加本局结果
                 if ("a".equals(winner) || "b".equals(winner)) {
                     addLog(iWon ? "你赢了！" : "你输了，" + opponentName + " 赢了");
