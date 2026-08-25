@@ -233,10 +233,11 @@ public class AuthActivity extends Activity {
             toast("昵称不合法：请输入 1~4 个汉字/字符");
             return;
         }
-        final String nick = badWordFilter.filter(rawNick);
-        if (!nick.equals(rawNick)) {
-            toast("昵称含不文明用语，已自动替换");
+        if (badWordFilter.containsBadWord(rawNick)) {
+            toast("昵称含不文明用语，请修改后重试");
+            return;
         }
+        final String nick = rawNick;
         if (password.length() < 6) {
             toast("密码至少 6 位");
             return;
