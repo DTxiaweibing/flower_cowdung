@@ -550,6 +550,56 @@ public class SupabaseClient {
         return null;
     }
 
+    // ===== 聊天消息（对战/人机/私密房间共用，按 table_id 隔离）=====
+
+    // 发送一条聊天。返回是否成功写入。
+    public boolean sendChat(String tableId, String senderId, String senderName, String message) {
+        if (tableId == null || message == null || message.isEmpty()) return false;
+        if (!ensureFreshToken() || accessToken == null) return false;
+        try {
+            JSONObject body = new JSONObject();
+            body.put("table_id", tableId);
+            if (senderId != null) body.put("sender_id", senderId);
+            if (senderName != null) body.put("sender_name", senderName);
+            body.put("message", message);
+            JSONObject res = postJson(PROJECT_URL + "/rest/v1/chat_messages", body, accessToken);
+            return res != null && !res.has("error");
+        } catch (Exception e) {
+            return false;
+        }
+    }
+
+    // 拉取某桌 id > lastId 的新消息（升序），用于轮询增量。
+    public JSONArray fetchChatAfter(String tableId, long lastId) {
+        if (tableId == null) return null;
+        if (!ensureFreshToken() || accessToken == null) return null;
+        try {
+            String url = PROJECT_URL + "/rest/v1/chat_messages"
+                    + "?select=id,sender_id,sender_name,message,created_at"
+                    + "&table_id=eq." + tableId
+                    + "&id=gt." + lastId
+                    + "&order=id.asc&limit=200";
+            return getArray(url);
+        } catch (Exception e) {
+            return null;
+        }
+    }
+
+    // 拉取某桌最近 limit 条历史（降序，最新在前），进入桌子时初始化用。
+    public JSONArray fetchChatHistory(String tableId, int limit) {
+        if (tableId == null) return null;
+        if (!ensureFreshToken() || accessToken == null) return null;
+        try {
+            String url = PROJECT_URL + "/rest/v1/chat_messages"
+                    + "?select=id,sender_id,sender_name,message,created_at"
+                    + "&table_id=eq." + tableId
+                    + "&order=id.desc&limit=" + limit;
+            return getArray(url);
+        } catch (Exception e) {
+            return null;
+        }
+    }
+
     // 坐下当玩家：优先坐 A 位（左座 / 先手）；若 A 已有人则坐 B 位（右座 / 后手）
     public boolean pvpSit(String tid) {
         JSONObject t = fetchPvpTable(tid);

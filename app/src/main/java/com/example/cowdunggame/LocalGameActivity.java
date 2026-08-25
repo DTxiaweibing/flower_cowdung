@@ -76,6 +76,13 @@ public class LocalGameActivity extends Activity {
 
     // 观战轮询
     private Handler watchHandler = new Handler(Looper.getMainLooper());
+
+    // 聊天同步（REST 轮询，1.5s/次）
+    private long lastChatId = 0;
+    private boolean chatActive = false;
+    private Handler chatHandler = new Handler(Looper.getMainLooper());
+    private Runnable chatPoll;
+    private final BadWordFilter badWordFilter = new BadWordFilter();
     private Runnable watchRunnable;
     private int lastRenderedMoveCount = -1;
 
@@ -160,6 +167,8 @@ public class LocalGameActivity extends Activity {
                 seatManager.startHeartbeat(tableNo);
             }
         }
+
+        initChat();
 
         resetSelectionState();
 
@@ -1058,12 +1067,30 @@ public class LocalGameActivity extends Activity {
             addLog("请输入要发送的消息");
             return;
         }
-        BadWordFilter badWordFilter = new BadWordFilter();
         if (badWordFilter.containsBadWord(text)) {
             addLog("检测到不文明用语，已自动屏蔽");
         }
-        text = badWordFilter.filter(text);
-        addLog(getPlayerName(), text);
+        final String finalText = badWordFilter.filter(text);
+        final String myName = getPlayerName();
+        final String myUid = client != null ? client.getUserId() : null;
+        if (client != null && tableNo != null && !tableNo.isEmpty()) {
+            async(new Runnable() {
+                @Override
+                public void run() {
+                    boolean ok = client.sendChat(tableNo, myUid, myName, finalText);
+                    if (ok) {
+                        pollChatOnce(); // 立即拉回（含自己刚发的）
+                    } else {
+                        runOnUiThread(new Runnable() {
+                            @Override
+                            public void run() {
+                                addLog("系统", "消息发送失败（离线或未登录）");
+                            }
+                        });
+                    }
+                }
+            });
+        }
         if (etMessageInput != null) {
             etMessageInput.setText("");
         }
@@ -1448,6 +1475,80 @@ public class LocalGameActivity extends Activity {
         }
     }
 
+    // ===== 聊天同步（玩家+观众，按 tableNo 聚合，1.5s 轮询）=====
+
+    private void initChat() {
+        if (client == null || tableNo == null || tableNo.isEmpty()) return;
+        chatActive = true;
+        chatPoll = new Runnable() {
+            @Override
+            public void run() {
+                if (!chatActive) return;
+                pollChatOnce();
+                if (chatActive) chatHandler.postDelayed(this, 1500);
+            }
+        };
+        async(new Runnable() {
+            @Override
+            public void run() {
+                final JSONArray hist = client.fetchChatHistory(tableNo, 50);
+                runOnUiThread(new Runnable() {
+                    @Override
+                    public void run() {
+                        renderHistory(hist);
+                        chatHandler.postDelayed(chatPoll, 1500);
+                    }
+                });
+            }
+        });
+    }
+
+    // 历史为降序（新→旧），按 旧→新 渲染，并把游标推到最大 id
+    private void renderHistory(JSONArray hist) {
+        if (hist == null || hist.length() == 0) return;
+        for (int i = hist.length() - 1; i >= 0; i--) {
+            JSONObject o = hist.optJSONObject(i);
+            if (o == null) continue;
+            long id = o.optLong("id", 0);
+            String name = o.optString("sender_name", "");
+            String msg = badWordFilter.filter(o.optString("message", ""));
+            addLog(name, msg);
+            if (id > lastChatId) lastChatId = id;
+        }
+    }
+
+    // 增量拉取并渲染新消息；每条都过一次敏感词过滤（接收方过滤）
+    private void pollChatOnce() {
+        if (!chatActive || client == null || tableNo == null) return;
+        async(new Runnable() {
+            @Override
+            public void run() {
+                final JSONArray msgs = client.fetchChatAfter(tableNo, lastChatId);
+                if (msgs == null) return;
+                runOnUiThread(new Runnable() {
+                    @Override
+                    public void run() {
+                        for (int i = 0; i < msgs.length(); i++) {
+                            JSONObject o = msgs.optJSONObject(i);
+                            if (o == null) continue;
+                            long id = o.optLong("id", 0);
+                            if (id <= lastChatId) continue;
+                            String name = o.optString("sender_name", "");
+                            String msg = badWordFilter.filter(o.optString("message", ""));
+                            addLog(name, msg);
+                            if (id > lastChatId) lastChatId = id;
+                        }
+                    }
+                });
+            }
+        });
+    }
+
+    private void stopChat() {
+        chatActive = false;
+        chatHandler.removeCallbacksAndMessages(null);
+    }
+
     // 后台线程执行，忽略异常
     private void async(Runnable r) {
         if (r == null || client == null || tableNo == null) return;
@@ -1532,6 +1633,7 @@ public class LocalGameActivity extends Activity {
         leavingTable = true;
         stopCountdown();
         watchHandler.removeCallbacksAndMessages(null);
+        stopChat();
         seatManager.stopHeartbeat();
         if (isPvp || isRoom) {
             // 人人桌/私密房间：退出后服务端自动判对方胜并释放座位
@@ -1555,6 +1657,7 @@ public class LocalGameActivity extends Activity {
         leavingTable = true;
         stopCountdown();
         watchHandler.removeCallbacksAndMessages(null);
+        stopChat();
         seatManager.stopHeartbeat();
         if (isPvp || isRoom) {
             if (isWatcher) {
@@ -1937,6 +2040,7 @@ public class LocalGameActivity extends Activity {
         countdownHandler.removeCallbacksAndMessages(null);
         hintHandler.removeCallbacksAndMessages(null);
         watchHandler.removeCallbacksAndMessages(null);
+        stopChat();
         if (seatManager != null) {
             seatManager.stopHeartbeat();
             // 遗言机制：进程被清/异常退出，尽力写库释放座位/观战（服务端超时兜底）

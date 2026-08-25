@@ -33,6 +33,7 @@ public class AuthActivity extends Activity {
 
     private final Handler main = new Handler(Looper.getMainLooper());
     private EditText etNick;
+    private final BadWordFilter badWordFilter = new BadWordFilter();
     private EditText etPassword;
     private Button btnMale;
     private Button btnFemale;
@@ -222,15 +223,19 @@ public class AuthActivity extends Activity {
 
     // ==================== 注册 ====================
     private void doRegister() {
-        final String nick = etNick.getText().toString().trim();
+        String rawNick = etNick.getText().toString().trim();
         final String password = etPassword.getText().toString();
         if (!genderSelected) {
             toast("请选择性别");
             return;
         }
-        if (!isValidNick(nick)) {
+        if (!isValidNick(rawNick)) {
             toast("昵称不合法：请输入 1~4 个汉字/字符");
             return;
+        }
+        final String nick = badWordFilter.filter(rawNick);
+        if (!nick.equals(rawNick)) {
+            toast("昵称含不文明用语，已自动替换");
         }
         if (password.length() < 6) {
             toast("密码至少 6 位");
