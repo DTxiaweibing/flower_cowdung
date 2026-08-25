@@ -61,6 +61,26 @@ public class MenuActivity extends Activity {
         title.setLayoutParams(titleParams);
         root.addView(title);
 
+        // 排行榜入口（标题正下方，无边框透明按钮）
+        Button btnRank = new Button(this);
+        btnRank.setText("排行榜");
+        btnRank.setTextSize(16);
+        btnRank.setAllCaps(false);
+        btnRank.setTextColor(Color.BLACK);
+        btnRank.setBackground(null);
+        FrameLayout.LayoutParams rankParams = new FrameLayout.LayoutParams(
+                FrameLayout.LayoutParams.WRAP_CONTENT, FrameLayout.LayoutParams.WRAP_CONTENT);
+        rankParams.gravity = Gravity.CENTER_HORIZONTAL;
+        rankParams.topMargin = (int) (screenH * 0.14f);
+        btnRank.setLayoutParams(rankParams);
+        btnRank.setOnClickListener(new View.OnClickListener() {
+            @Override
+            public void onClick(View v) {
+                showMyRankPopup();
+            }
+        });
+        root.addView(btnRank);
+
         // 底部按钮：2×2 网格，尺寸/间距全部按屏幕比例用权重分配，保证各设备位置基本一致
         final int menuW = (int) (screenW * 0.92f);
         final int menuH = (int) (screenH * 0.20f);   // 两行按钮约占屏高 20%
@@ -273,5 +293,29 @@ public class MenuActivity extends Activity {
 
     private int dp(float value) {
         return (int) (value * getResources().getDisplayMetrics().density + 0.5f);
+    }
+
+    // 点击「排行榜」：弹出本人积分军衔卡（黑底白字，半屏宽圆角，5 秒自动隐藏）
+    private void showMyRankPopup() {
+        if (client == null) return;
+        final String uid = client.getUserId();
+        new Thread(new Runnable() {
+            @Override
+            public void run() {
+                final org.json.JSONObject p = client.getProfile(uid);
+                final org.json.JSONObject rk = client.getUserRank(uid);
+                final int rank = rk != null ? rk.optInt("rank", 0) : 0;
+                runOnUiThread(new Runnable() {
+                    @Override
+                    public void run() {
+                        if (p == null) return;
+                        ProfilePopup.show(MenuActivity.this,
+                                p.optString("nickname", ""), p.optInt("score", 0), rank,
+                                p.optInt("wins", 0), p.optInt("losses", 0),
+                                true, Gravity.CENTER);
+                    }
+                });
+            }
+        }).start();
     }
 }

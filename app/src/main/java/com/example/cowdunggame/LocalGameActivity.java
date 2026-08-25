@@ -91,7 +91,19 @@ public class LocalGameActivity extends Activity {
     private boolean isRoom = false;        // 是否私密房间对局（source=room，行为与 PvP 一致，走房间 RPC）
     private String mySide = null;         // 本桌我坐哪侧：'a'(左/先手) / 'b'(右/后手)
     private String opponentName = "对手"; // 对方昵称（轮询到资料后更新）
+    private String tvPlayerNameId = null;   // 左侧昵称对应玩家 id（点开资料用）
+    private String tvComputerNameId = null; // 右侧昵称对应玩家 id（点开资料用）
+    private boolean settled = false;       // 本局积分是否已上报（防重复结算）
     private String pvpANick = "等待对手入座..."; // A 侧昵称（观战/日志统一显示用）
+
+    // 点击昵称打开对方/自己的资料卡
+    private final View.OnClickListener nameClickListener = new View.OnClickListener() {
+        @Override
+        public void onClick(View v) {
+            String uid = (v == tvPlayerName) ? tvPlayerNameId : tvComputerNameId;
+            if (uid != null && !uid.isEmpty()) openProfile(uid);
+        }
+    };
     private String pvpBNick = "等待对手入座..."; // B 侧昵称
     private boolean pvpResultShown = false; // 防重复显示胜负图
     private boolean pvpStarted = false;   // 对方开局后才可操作（双方就绪自动开局）
@@ -158,6 +170,7 @@ public class LocalGameActivity extends Activity {
         if (tableNo != null && !tableNo.isEmpty()) {
             client = new SupabaseClient(this);
             seatManager = new SeatManager(client);
+            tvPlayerNameId = client.getUserId(); // 左侧默认是自己
             // 遗言：玩家/观众进程存活期间持续心跳（20s/次，配合服务端 3 分钟超时兜底）
             if (isPvp) {
                 seatManager.startPvpHeartbeat(tableNo);
@@ -334,6 +347,12 @@ public class LocalGameActivity extends Activity {
         name5Params.setMargins(dp(2), 0, dp(2), 0);
         tvComputerName.setLayoutParams(name5Params);
         buttonLayout.addView(tvComputerName);
+
+        // 昵称可点开资料卡（有 id 时才真正可点）
+        tvPlayerName.setClickable(true);
+        tvPlayerName.setOnClickListener(nameClickListener);
+        tvComputerName.setClickable(true);
+        tvComputerName.setOnClickListener(nameClickListener);
 
         logLayout = new LinearLayout(this);
         logLayout.setOrientation(LinearLayout.VERTICAL);
@@ -547,14 +566,20 @@ public class LocalGameActivity extends Activity {
         JSONObject b = table.optJSONObject("player_b");
         String aNick = (a != null ? a.optString("nickname", "") : "").trim();
         String bNick = (b != null ? b.optString("nickname", "") : "").trim();
+        String aId = (a != null ? a.optString("id", "") : "").trim();
+        String bId = (b != null ? b.optString("id", "") : "").trim();
         pvpANick = aNick.isEmpty() ? "等待对手入座..." : aNick;
         pvpBNick = bNick.isEmpty() ? "等待对手入座..." : bNick;
         if ("a".equals(mySide)) {
             tvPlayerName.setText(aNick.isEmpty() ? (playerName.isEmpty() ? "我" : playerName) : aNick);
+            tvPlayerNameId = aId.isEmpty() ? tvPlayerNameId : aId;
             opponentName = bNick.isEmpty() ? "等待对手入座..." : bNick;
+            tvComputerNameId = bId.isEmpty() ? tvComputerNameId : bId;
         } else if ("b".equals(mySide)) {
             tvPlayerName.setText(bNick.isEmpty() ? (playerName.isEmpty() ? "我" : playerName) : bNick);
+            tvPlayerNameId = bId.isEmpty() ? tvPlayerNameId : bId;
             opponentName = aNick.isEmpty() ? "等待对手入座..." : aNick;
+            tvComputerNameId = aId.isEmpty() ? tvComputerNameId : aId;
         }
         tvComputerName.setText(opponentName);
 
@@ -567,6 +592,23 @@ public class LocalGameActivity extends Activity {
             // 胜负已定：winner 'a'/'b'
             String winner = gs.optString("winner", "");
             boolean iWon = winner.equals(mySide);
+            // 积分结算（人人 +5/-1，私密 +10/-2），仅结算一次
+            if (!settled) {
+                settled = true;
+                final String wId = "a".equals(winner) ? aId : bId;
+                final String lId = "a".equals(winner) ? bId : aId;
+                final String rType = isRoom ? "private" : "lobby";
+                final String tId = isRoom ? null : tableNo;
+                final String rCode = isRoom ? roomCode : null;
+                if (!wId.isEmpty() && !lId.isEmpty() && client != null) {
+                    async(new Runnable() {
+                        @Override
+                        public void run() {
+                            client.finishGame(tId, rCode, rType, wId, lId);
+                        }
+                    });
+                }
+            }
             if (!pvpResultShown) {
                 pvpResultShown = true;
                 isGameStarted = false;
@@ -610,6 +652,7 @@ public class LocalGameActivity extends Activity {
                 // 新一局必须重置：否则第二局结束时因 pvpResultShown 已为 true
                 // 不再显示结果、按钮卡在"对方回合中"，游戏无法继续
                 pvpResultShown = false;
+                settled = false; // 新一局重新结算积分
                 pvpLogMoveCount = 0;
                 moveList = new JSONArray();
                 hideResultImage();
@@ -851,6 +894,8 @@ public class LocalGameActivity extends Activity {
         if (bNick.isEmpty()) bNick = "后入座空";
         tvPlayerName.setText(aNick);
         setupComputerName(bNick);
+        tvPlayerNameId = (a != null ? a.optString("id", "") : "").trim();
+        tvComputerNameId = (b != null ? b.optString("id", "") : "").trim();
 
         JSONObject gs = table.optJSONObject("game_state");
         if (gs == null) gs = new JSONObject();
@@ -1287,6 +1332,40 @@ public class LocalGameActivity extends Activity {
         }
         showResultImage(playerWin);
         reportSeated(); // 对局结束，回到「已入座」状态
+        // 人机积分：赢 +1（胜场+1），输仅总场次+1（不扣分也不加分）
+        if (client != null) {
+            final boolean won = playerWin;
+            async(new Runnable() {
+                @Override
+                public void run() {
+                    client.pveFinish(client.getUserId(), won);
+                }
+            });
+        }
+    }
+
+    // 打开玩家资料卡（点昵称弹出半屏圆角弹窗，白底黑字，悬浮在棋盘/日志区，5 秒自动隐藏）
+    private void openProfile(String uid) {
+        if (uid == null || uid.isEmpty() || client == null) return;
+        final String fid = uid;
+        new Thread(new Runnable() {
+            @Override
+            public void run() {
+                final org.json.JSONObject p = client.getProfile(fid);
+                final org.json.JSONObject rk = client.getUserRank(fid);
+                final int rank = rk != null ? rk.optInt("rank", 0) : 0;
+                runOnUiThread(new Runnable() {
+                    @Override
+                    public void run() {
+                        if (p == null) return;
+                        ProfilePopup.show(LocalGameActivity.this,
+                                p.optString("nickname", ""), p.optInt("score", 0), rank,
+                                p.optInt("wins", 0), p.optInt("losses", 0),
+                                false, Gravity.CENTER);
+                    }
+                });
+            }
+        }).start();
     }
 
     // ===== 人机桌状态上报（仅当从大厅带桌号进入） =====

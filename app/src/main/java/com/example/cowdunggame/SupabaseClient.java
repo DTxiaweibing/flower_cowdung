@@ -418,8 +418,8 @@ public class SupabaseClient {
         try {
             if (!ensureFreshToken() || accessToken == null) return null;
             String urlStr = PROJECT_URL
-                + "/rest/v1/pvp_tables?select=*,player_a:profiles!pvp_tables_player_a_id_fkey(gender,nickname),"
-                + "player_b:profiles!pvp_tables_player_b_id_fkey(gender,nickname)&order=num";
+                + "/rest/v1/pvp_tables?select=*,player_a:profiles!pvp_tables_player_a_id_fkey(gender,nickname,id),"
+                + "player_b:profiles!pvp_tables_player_b_id_fkey(gender,nickname,id)&order=num";
             URL url = new URL(urlStr);
             HttpURLConnection conn = (HttpURLConnection) url.openConnection();
             conn.setRequestMethod("GET");
@@ -444,8 +444,8 @@ public class SupabaseClient {
         try {
             if (!ensureFreshToken() || accessToken == null) return null;
             String urlStr = PROJECT_URL
-                + "/rest/v1/pvp_tables?select=*,player_a:profiles!pvp_tables_player_a_id_fkey(gender,nickname),"
-                + "player_b:profiles!pvp_tables_player_b_id_fkey(gender,nickname)&id=eq." + tid;
+                + "/rest/v1/pvp_tables?select=*,player_a:profiles!pvp_tables_player_a_id_fkey(gender,nickname,id),"
+                + "player_b:profiles!pvp_tables_player_b_id_fkey(gender,nickname,id)&id=eq." + tid;
             URL url = new URL(urlStr);
             HttpURLConnection conn = (HttpURLConnection) url.openConnection();
             conn.setRequestMethod("GET");
@@ -600,6 +600,73 @@ public class SupabaseClient {
         }
     }
 
+    // ===== 积分 / 排名 =====
+
+    // 人人/私密房间结算：胜+5/负-1（lobby），胜+10/负-2（private）。服务端幂等。
+    public boolean finishGame(String tableId, String roomCode, String roomType,
+                              String winnerId, String loserId) {
+        if (winnerId == null || loserId == null) return false;
+        JSONObject args = new JSONObject();
+        try {
+            if (tableId != null) args.put("table_id", tableId);
+            if (roomCode != null) args.put("room_code", roomCode);
+            args.put("room_type", roomType);
+            args.put("winner_id", winnerId);
+            args.put("loser_id", loserId);
+        } catch (Exception ignore) { }
+        RpcResult r = rpc("finish_game", args);
+        return r != null && r.ok;
+    }
+
+    // 人机结算：赢 true -> +1 胜场；false -> 仅 total_games+1（不扣分也不加分）
+    public boolean pveFinish(String playerId, boolean won) {
+        if (playerId == null) return false;
+        JSONObject args = new JSONObject();
+        try {
+            args.put("player_id", playerId);
+            args.put("won", won);
+        } catch (Exception ignore) { }
+        RpcResult r = rpc("pve_finish", args);
+        return r != null && r.ok;
+    }
+
+    // 排行榜 Top N（score desc, wins desc, score_reached_at asc）
+    public JSONArray getRanking(int limit) {
+        JSONObject args = new JSONObject();
+        try { args.put("limit_n", limit); } catch (Exception ignore) { }
+        RpcResult r = rpc("get_ranking", args);
+        if (r != null && r.ok && r.array != null) return r.array;
+        return null;
+    }
+
+    // 单人真实排名（rank/score/wins/losses/total_games）
+    public JSONObject getUserRank(String userId) {
+        if (userId == null) return null;
+        JSONObject args = new JSONObject();
+        try { args.put("user_id", userId); } catch (Exception ignore) { }
+        RpcResult r = rpc("get_user_rank", args);
+        if (r != null && r.ok && r.array != null && r.array.length() > 0) {
+            return r.array.optJSONObject(0);
+        }
+        return null;
+    }
+
+    // 拉取单个玩家资料（用于资料卡）
+    public JSONObject getProfile(String userId) {
+        if (userId == null) return null;
+        if (!ensureFreshToken() || accessToken == null) return null;
+        try {
+            String url = PROJECT_URL + "/rest/v1/profiles"
+                    + "?select=id,nickname,gender,score,wins,losses,total_games"
+                    + "&id=eq." + userId + "&limit=1";
+            JSONArray arr = getArray(url);
+            if (arr != null && arr.length() > 0) return arr.optJSONObject(0);
+        } catch (Exception e) {
+            // ignore
+        }
+        return null;
+    }
+
     // 坐下当玩家：优先坐 A 位（左座 / 先手）；若 A 已有人则坐 B 位（右座 / 后手）
     public boolean pvpSit(String tid) {
         JSONObject t = fetchPvpTable(tid);
@@ -671,8 +738,8 @@ public class SupabaseClient {
         try {
             if (!ensureFreshToken() || accessToken == null) return null;
             String urlStr = PROJECT_URL
-                + "/rest/v1/private_rooms?select=*,player_a:profiles!private_rooms_player_a_id_fkey(gender,nickname),"
-                + "player_b:profiles!private_rooms_player_b_id_fkey(gender,nickname)&room_code=eq." + code;
+                + "/rest/v1/private_rooms?select=*,player_a:profiles!private_rooms_player_a_id_fkey(gender,nickname,id),"
+                + "player_b:profiles!private_rooms_player_b_id_fkey(gender,nickname,id)&room_code=eq." + code;
             URL url = new URL(urlStr);
             HttpURLConnection conn = (HttpURLConnection) url.openConnection();
             conn.setRequestMethod("GET");
