@@ -76,7 +76,7 @@ public class MenuActivity extends Activity {
         btnRank.setOnClickListener(new View.OnClickListener() {
             @Override
             public void onClick(View v) {
-                showMyRankPopup();
+                RankingBoard.show(MenuActivity.this, client);
             }
         });
         root.addView(btnRank);
@@ -295,27 +295,4 @@ public class MenuActivity extends Activity {
         return (int) (value * getResources().getDisplayMetrics().density + 0.5f);
     }
 
-    // 点击「排行榜」：弹出本人积分军衔卡（黑底白字，半屏宽圆角，5 秒自动隐藏）
-    private void showMyRankPopup() {
-        if (client == null) return;
-        final String uid = client.getUserId();
-        new Thread(new Runnable() {
-            @Override
-            public void run() {
-                final org.json.JSONObject p = client.getProfile(uid);
-                final org.json.JSONObject rk = client.getUserRank(uid);
-                final int rank = rk != null ? rk.optInt("rank", 0) : 0;
-                runOnUiThread(new Runnable() {
-                    @Override
-                    public void run() {
-                        if (p == null) return;
-                        ProfilePopup.show(MenuActivity.this,
-                                p.optString("nickname", ""), p.optInt("score", 0), rank,
-                                p.optInt("wins", 0), p.optInt("losses", 0),
-                                true, Gravity.CENTER);
-                    }
-                });
-            }
-        }).start();
-    }
 }
