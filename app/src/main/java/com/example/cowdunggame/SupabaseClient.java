@@ -608,11 +608,11 @@ public class SupabaseClient {
         if (winnerId == null || loserId == null) return false;
         JSONObject args = new JSONObject();
         try {
-            if (tableId != null) args.put("table_id", tableId);
-            if (roomCode != null) args.put("room_code", roomCode);
-            args.put("room_type", roomType);
-            args.put("winner_id", winnerId);
-            args.put("loser_id", loserId);
+            if (tableId != null) args.put("in_table_id", tableId);
+            if (roomCode != null) args.put("in_room_code", roomCode);
+            args.put("in_room_type", roomType);
+            args.put("in_winner_id", winnerId);
+            args.put("in_loser_id", loserId);
         } catch (Exception ignore) { }
         RpcResult r = rpc("finish_game", args);
         return r != null && r.ok;
@@ -623,8 +623,8 @@ public class SupabaseClient {
         if (playerId == null) return false;
         JSONObject args = new JSONObject();
         try {
-            args.put("player_id", playerId);
-            args.put("won", won);
+            args.put("in_player_id", playerId);
+            args.put("in_won", won);
         } catch (Exception ignore) { }
         RpcResult r = rpc("pve_finish", args);
         return r != null && r.ok;
@@ -643,7 +643,7 @@ public class SupabaseClient {
     public JSONObject getUserRank(String userId) {
         if (userId == null) return null;
         JSONObject args = new JSONObject();
-        try { args.put("user_id", userId); } catch (Exception ignore) { }
+        try { args.put("in_user_id", userId); } catch (Exception ignore) { }
         RpcResult r = rpc("get_user_rank", args);
         if (r != null && r.ok && r.array != null && r.array.length() > 0) {
             return r.array.optJSONObject(0);

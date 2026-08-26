@@ -1,8 +1,10 @@
 -- ============================================================
--- 积分 / 排名 / 军衔 体系（2025 补丁）
---   规则：人机 赢+1 输0；人人(pvp) 赢+5 输-1；私密(private) 赢+10 输-2
---   排名：score desc, wins desc, score_reached_at asc（最早达到该分者靠前）
---   军衔：客户端按分数映射（新兵/士兵/班长/排长/连长/营长/团长/旅长/司令/军长/元帅）
+-- 积分 / 排名 / 军衔 体系（最终版，幂等、只更新真实存在的表）
+--   规则：人机 赢+1 输0；人人(pvp/lobby) 赢+5 输-1；私密(private) 赢+10 输-2
+--   排名：score desc, wins desc, score_reached_at asc（同分先到者靠前）
+--   军衔：客户端按分数映射（每 200 分一档）
+--   说明：仓库里多份历史脚本都定义过 finish_game 且引用已删除的 lobby_tables/rooms，
+--        本脚本先 DROP 再重建，确保线上函数为此版本。
 -- ============================================================
 
 do $$
@@ -15,7 +17,13 @@ begin
   end if;
 end $$;
 
--- finish_game：重写规则 + 幂等（抢占 finished 状态，二次调用直接返回已结算记录）
+-- 先清理可能冲突的旧函数（含不同签名的重载），避免 404 / 调错版本
+drop function if exists public.finish_game(text, char(4), text, uuid, uuid, jsonb) cascade;
+drop function if exists public.pve_finish(uuid, boolean) cascade;
+drop function if exists public.get_ranking(int) cascade;
+drop function if exists public.get_user_rank(uuid) cascade;
+
+-- 结算：人人/私密。用 game_state.scored 做每局幂等，重开后会重置，不会漏算/重算
 create or replace function public.finish_game(
   in_table_id text default null,
   in_room_code char(4) default null,
@@ -37,15 +45,18 @@ begin
   if in_winner_id is null or in_loser_id is null then raise exception 'INVALID_RESULT'; end if;
   if in_winner_id = in_loser_id then raise exception 'INVALID_RESULT'; end if;
 
-  -- 幂等：仅首次结算可把本局状态翻成 finished
   if in_room_type = 'private' and in_room_code is not null then
-    update public.private_rooms set status = 'finished', game_state = '{}'::jsonb
-     where room_code = in_room_code and status <> 'finished';
+    update public.private_rooms
+       set game_state = jsonb_set(coalesce(game_state, '{}'::jsonb), '{scored}', 'true'::jsonb)
+     where room_code = in_room_code
+       and (game_state->>'scored') is distinct from 'true';
     if found then claimed := true; end if;
   else
     if in_table_id is not null then
-      update public.pvp_tables set status = 'finished', game_state = '{}'::jsonb
-       where id = in_table_id and status <> 'finished';
+      update public.pvp_tables
+         set game_state = jsonb_set(coalesce(game_state, '{}'::jsonb), '{scored}', 'true'::jsonb)
+       where id = in_table_id
+         and (game_state->>'scored') is distinct from 'true';
       if found then claimed := true; end if;
     end if;
   end if;
@@ -54,7 +65,7 @@ begin
     select id into gid from public.games
      where (in_table_id is not null and table_id = in_table_id)
         or (in_room_code is not null and room_code = in_room_code)
-     order by created_at desc limit 1;
+     order by id desc limit 1;
     return gid;
   end if;
 
@@ -64,9 +75,6 @@ begin
           in_winner_id, in_loser_id,
           jsonb_build_object('winner', delta_win, 'loser', delta_lose), in_moves)
   returning id into gid;
-
-  perform 1 from public.profiles where id = in_winner_id for update;
-  perform 1 from public.profiles where id = in_loser_id  for update;
 
   update public.profiles
    set score = score + delta_win, wins = wins + 1, total_games = total_games + 1,
@@ -82,7 +90,7 @@ begin
 end;
 $$;
 
--- 人机结算（赢+1 胜场+1；输仅 total_games+1，不扣分也不加分）
+-- 人机结算：赢 +1（胜场+1）；输仅总场次+1（不扣分也不加分）
 create or replace function public.pve_finish(in_player_id uuid, in_won boolean)
 returns void
 language plpgsql security definer set search_path = public
@@ -102,7 +110,7 @@ begin
 end;
 $$;
 
--- get_ranking：排序改为 score desc, wins desc, score_reached_at asc
+-- 排行榜 Top N（score desc, wins desc, score_reached_at asc）
 create or replace function public.get_ranking(limit_n int default 100)
 returns table (id uuid, nickname text, gender text, score int, wins int, losses int, total_games int)
 language plpgsql security definer set search_path = public
@@ -117,15 +125,16 @@ begin
 end;
 $$;
 
--- 查单人真实排名（与 get_ranking 同一三键比较，保证一致）
+-- 单人真实排名（与 get_ranking 同一三键比较，保证一致）
 create or replace function public.get_user_rank(in_user_id uuid)
 returns table (rank int, score int, wins int, losses int, total_games int)
 language plpgsql security definer set search_path = public
 as $$
 declare
-  my_score int; my_wins int; my_reached timestamptz; r int;
+  my_score int; my_wins int; my_losses int; my_total int; my_reached timestamptz; r int;
 begin
-  select p.score, p.wins, p.score_reached_at into my_score, my_wins, my_reached
+  select p.score, p.wins, p.losses, p.total_games, p.score_reached_at
+    into my_score, my_wins, my_losses, my_total, my_reached
   from public.profiles p where p.id = in_user_id;
   if my_score is null then return; end if;
   select count(*) + 1 into r from public.profiles p
@@ -134,10 +143,7 @@ begin
           or (p.score = my_score and p.wins > my_wins)
           or (p.score = my_score and p.wins = my_wins and p.score_reached_at < my_reached));
   return query
-  select r, my_score,
-    coalesce((select wins from public.profiles where id = in_user_id), 0),
-    coalesce((select losses from public.profiles where id = in_user_id), 0),
-    coalesce((select total_games from public.profiles where id = in_user_id), 0);
+  select r, my_score, my_wins, my_losses, my_total;
 end;
 $$;
 
