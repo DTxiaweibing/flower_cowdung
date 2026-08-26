@@ -31,6 +31,31 @@ public class ProfilePopup {
     // gravity 控制悬浮位置（如 Gravity.CENTER 或 Gravity.CENTER_HORIZONTAL|Gravity.TOP）
     public static void show(Activity act, String nickname, int score, int rank,
                             int wins, int losses, boolean blackStyle, int gravity) {
+        showAt(act, nickname, score, rank, wins, losses, blackStyle, gravity, 0, 0);
+    }
+
+    // 以某个 View 为锚点定位（与「观众列表」弹窗一致：水平居中于锚点、顶部对齐），
+    // 找不到锚点则回退到屏幕居中。
+    public static void show(Activity act, String nickname, int score, int rank,
+                            int wins, int losses, boolean blackStyle, View anchor) {
+        int screenW = act.getResources().getDisplayMetrics().widthPixels;
+        int popupW = screenW / 2;
+        int gravity = Gravity.CENTER;
+        int x = 0, y = 0;
+        if (anchor != null) {
+            int[] loc = new int[2];
+            anchor.getLocationOnScreen(loc);
+            int aW = anchor.getWidth();
+            x = loc[0] + (aW - popupW) / 2;
+            y = loc[1];
+            gravity = Gravity.TOP | Gravity.LEFT;
+        }
+        showAt(act, nickname, score, rank, wins, losses, blackStyle, gravity, x, y);
+    }
+
+    private static void showAt(Activity act, String nickname, int score, int rank,
+                               int wins, int losses, boolean blackStyle,
+                               int gravity, int x, int y) {
         if (act == null || act.isFinishing()) return;
         final ViewGroup content = (ViewGroup) act.findViewById(android.R.id.content);
         if (content == null) return;
@@ -68,7 +93,10 @@ public class ProfilePopup {
         FrameLayout.LayoutParams bp = new FrameLayout.LayoutParams(w, ViewGroup.LayoutParams.WRAP_CONTENT);
         bp.gravity = gravity;
         if ((gravity & Gravity.VERTICAL_GRAVITY_MASK) == Gravity.TOP) {
-            bp.topMargin = (int) (screenH * 0.18f);
+            bp.topMargin = (y > 0) ? y : (int) (screenH * 0.18f);
+        }
+        if ((gravity & Gravity.HORIZONTAL_GRAVITY_MASK) == Gravity.LEFT) {
+            bp.leftMargin = (x > 0) ? x : 0;
         }
         box.setLayoutParams(bp);
         overlay.addView(box);

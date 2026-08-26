@@ -1361,7 +1361,7 @@ public class LocalGameActivity extends Activity {
                         ProfilePopup.show(LocalGameActivity.this,
                                 p.optString("nickname", ""), p.optInt("score", 0), rank,
                                 p.optInt("wins", 0), p.optInt("losses", 0),
-                                false, Gravity.CENTER);
+                                false, logLayout);
                     }
                 });
             }
@@ -1540,6 +1540,15 @@ public class LocalGameActivity extends Activity {
         popup.setOutsideTouchable(true);
         popup.setFocusable(true);
         popup.setElevation(dp(8));
+
+        // 5 秒无操作自动隐藏
+        final Handler popupHandler = new Handler(Looper.getMainLooper());
+        popupHandler.postDelayed(new Runnable() {
+            @Override
+            public void run() {
+                if (popup.isShowing()) popup.dismiss();
+            }
+        }, 5000);
 
         if (logLayout != null) {
             int[] loc = new int[2];
