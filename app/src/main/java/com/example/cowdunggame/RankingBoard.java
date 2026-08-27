@@ -9,6 +9,7 @@ import android.view.View;
 import android.view.ViewGroup;
 import android.widget.FrameLayout;
 import android.widget.LinearLayout;
+import android.widget.ProgressBar;
 import android.widget.ScrollView;
 import android.widget.TextView;
 
@@ -90,7 +91,18 @@ public class RankingBoard {
                 ViewGroup.LayoutParams.MATCH_PARENT, 0);
         svLp.weight = 1f;
         sv.setLayoutParams(svLp);
+        sv.setVisibility(View.GONE);   // 数据返回前隐藏
         card.addView(sv);
+
+        // 加载动画（数据返回前显示）
+        final ProgressBar pb = new ProgressBar(act);
+        pb.setIndeterminate(true);
+        LinearLayout.LayoutParams pbLp = new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT);
+        pbLp.weight = 1f;
+        pbLp.gravity = Gravity.CENTER;
+        pb.setLayoutParams(pbLp);
+        card.addView(pb);
 
         overlay.addView(card);
         ((ViewGroup) act.findViewById(android.R.id.content)).addView(overlay);
@@ -114,6 +126,8 @@ public class RankingBoard {
                 act.runOnUiThread(new Runnable() {
                     @Override
                     public void run() {
+                        pb.setVisibility(View.GONE);
+                        sv.setVisibility(View.VISIBLE);
                         // 我的排名
                         if (myRank != null && myRank.optInt("rank", 0) > 0) {
                             int r = myRank.optInt("rank", 0);
