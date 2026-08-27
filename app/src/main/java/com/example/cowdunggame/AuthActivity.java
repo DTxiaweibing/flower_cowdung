@@ -15,6 +15,7 @@ import android.os.Bundle;
 import android.os.Handler;
 import android.os.Looper;
 import android.text.InputType;
+import android.text.method.PasswordTransformationMethod;
 import android.view.Gravity;
 import android.view.View;
 import android.widget.Button;
@@ -45,6 +46,7 @@ public class AuthActivity extends Activity {
     private Button btnSwitch;
     private boolean registerMode = false;
     private boolean busy = false;
+    private boolean passwordVisible = false;
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
@@ -173,21 +175,23 @@ public class AuthActivity extends Activity {
         ivEye.setOnClickListener(new View.OnClickListener() {
             @Override
             public void onClick(View v) {
-                boolean visible = (etPassword.getInputType()
-                        & InputType.TYPE_TEXT_VARIATION_VISIBLE_PASSWORD) != 0;
-                if (visible) {
-                    etPassword.setInputType(InputType.TYPE_CLASS_TEXT
-                            | InputType.TYPE_TEXT_VARIATION_PASSWORD);
-                    ivEye.setImageResource(R.drawable.ic_eye_closed);
-                } else {
+                passwordVisible = !passwordVisible;
+                if (passwordVisible) {
                     etPassword.setInputType(InputType.TYPE_CLASS_TEXT
                             | InputType.TYPE_TEXT_VARIATION_VISIBLE_PASSWORD);
+                    etPassword.setTransformationMethod(null);
                     ivEye.setImageResource(R.drawable.ic_eye_open);
+                } else {
+                    etPassword.setInputType(InputType.TYPE_CLASS_TEXT
+                            | InputType.TYPE_TEXT_VARIATION_PASSWORD);
+                    etPassword.setTransformationMethod(new AsteriskPasswordTransformation());
+                    ivEye.setImageResource(R.drawable.ic_eye_closed);
                 }
                 etPassword.setSelection(etPassword.getText().length());
             }
         });
         pwRow.addView(ivEye);
+        etPassword.setTransformationMethod(new AsteriskPasswordTransformation());
 
         card.addView(pwRow);
 
@@ -467,5 +471,25 @@ public class AuthActivity extends Activity {
 
     private int dp(float value) {
         return (int) (value * getResources().getDisplayMetrics().density + 0.5f);
+    }
+
+    // 密文时一律显示为 '*'（避免部分设备密码圆点字形缺失显示成方块）
+    private static class AsteriskPasswordTransformation extends PasswordTransformationMethod {
+        @Override
+        public CharSequence getTransformation(CharSequence source, View view) {
+            return new AsteriskCharSequence(source);
+        }
+
+        private static class AsteriskCharSequence implements CharSequence {
+            private final CharSequence source;
+            AsteriskCharSequence(CharSequence source) { this.source = source; }
+            @Override public int length() { return source.length(); }
+            @Override public char charAt(int index) { return '*'; }
+            @Override public CharSequence subSequence(int start, int end) {
+                char[] buf = new char[end - start];
+                for (int i = start; i < end; i++) buf[i - start] = '*';
+                return new String(buf);
+            }
+        }
     }
 }
