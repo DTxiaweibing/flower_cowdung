@@ -146,11 +146,50 @@ public class AuthActivity extends Activity {
         etPassword.setHint("密码（至少 6 位）");
         etPassword.setTextColor(Color.BLACK);
         etPassword.setHintTextColor(Color.GRAY);
-        etPassword.setBackground(editBg());
-        etPassword.setPadding(dp(10), dp(10), dp(10), dp(10));
         etPassword.setTextSize(16);
         etPassword.setInputType(InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_VARIATION_PASSWORD);
-        card.addView(etPassword);
+
+        // 密码可见性切换：眼睛图标（睁眼=明文，闭眼=密文）
+        LinearLayout pwRow = new LinearLayout(this);
+        pwRow.setOrientation(LinearLayout.HORIZONTAL);
+        pwRow.setGravity(Gravity.CENTER_VERTICAL);
+        pwRow.setBackground(editBg());
+        int pwPad = dp(10);
+        pwRow.setPadding(pwPad, pwPad, pwPad, pwPad);
+
+        etPassword.setBackground(null);
+        LinearLayout.LayoutParams etLp = new LinearLayout.LayoutParams(
+                0, LinearLayout.LayoutParams.MATCH_PARENT, 1f);
+        etPassword.setLayoutParams(etLp);
+        pwRow.addView(etPassword);
+
+        final ImageView ivEye = new ImageView(this);
+        ivEye.setImageResource(R.drawable.ic_eye_closed);
+        ivEye.setScaleType(ImageView.ScaleType.CENTER_INSIDE);
+        int eyeSize = dp(28);
+        LinearLayout.LayoutParams eyeLp = new LinearLayout.LayoutParams(eyeSize, eyeSize);
+        ivEye.setLayoutParams(eyeLp);
+        ivEye.setPadding(dp(6), 0, 0, 0);
+        ivEye.setOnClickListener(new View.OnClickListener() {
+            @Override
+            public void onClick(View v) {
+                boolean visible = (etPassword.getInputType()
+                        & InputType.TYPE_TEXT_VARIATION_VISIBLE_PASSWORD) != 0;
+                if (visible) {
+                    etPassword.setInputType(InputType.TYPE_CLASS_TEXT
+                            | InputType.TYPE_TEXT_VARIATION_PASSWORD);
+                    ivEye.setImageResource(R.drawable.ic_eye_closed);
+                } else {
+                    etPassword.setInputType(InputType.TYPE_CLASS_TEXT
+                            | InputType.TYPE_TEXT_VARIATION_VISIBLE_PASSWORD);
+                    ivEye.setImageResource(R.drawable.ic_eye_open);
+                }
+                etPassword.setSelection(etPassword.getText().length());
+            }
+        });
+        pwRow.addView(ivEye);
+
+        card.addView(pwRow);
 
         btnSubmit = new Button(this);
         btnSubmit.setText(registerMode ? "注 册" : "登 录");
