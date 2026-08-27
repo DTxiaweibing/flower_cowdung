@@ -161,7 +161,7 @@ public class AuthActivity extends Activity {
 
         etPassword.setBackground(null);
         LinearLayout.LayoutParams etLp = new LinearLayout.LayoutParams(
-                0, LinearLayout.LayoutParams.MATCH_PARENT, 1f);
+                0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f);
         etPassword.setLayoutParams(etLp);
         pwRow.addView(etPassword);
 

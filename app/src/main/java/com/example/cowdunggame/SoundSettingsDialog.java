@@ -6,6 +6,7 @@ package com.example.cowdunggame;
 
 import android.app.AlertDialog;
 import android.content.Context;
+import android.graphics.Color;
 import android.content.SharedPreferences;
 import android.view.View;
 import android.widget.CompoundButton;
@@ -34,6 +35,18 @@ public class SoundSettingsDialog {
                 if (onSfxChanged != null) onSfxChanged.run();
             }
         }));
+
+        // 分隔线（两行开关之间）
+        int divH = (int) (density + 0.5f);
+        int divPadX = (int) (density * 4 + 0.5f);
+        View divider = new View(context);
+        divider.setBackgroundColor(Color.parseColor("#E0E0E0"));
+        LinearLayout.LayoutParams dlp = new LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT, divH);
+        dlp.setMargins(divPadX, 0, divPadX, 0);
+        divider.setLayoutParams(dlp);
+        root.addView(divider);
+
         root.addView(row(context, "音乐", music, new CompoundButton.OnCheckedChangeListener() {
             @Override
             public void onCheckedChanged(CompoundButton buttonView, boolean isChecked) {
@@ -42,11 +55,16 @@ public class SoundSettingsDialog {
             }
         }));
 
-        new AlertDialog.Builder(context)
+        AlertDialog dialog = new AlertDialog.Builder(context)
                 .setTitle("声音设置")
                 .setView(root)
                 .setPositiveButton("关闭", null)
-                .show();
+                .create();
+        dialog.show();
+        // 圆角背景
+        if (dialog.getWindow() != null) {
+            dialog.getWindow().setBackgroundDrawableResource(R.drawable.dialog_round_bg);
+        }
     }
 
     private static LinearLayout row(Context context, String label, boolean checked,
