@@ -152,6 +152,7 @@ public class LocalGameActivity extends Activity {
         sharedPreferences = getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE);
         playerName = sharedPreferences.getString("PlayerName", "");
         playerGender = sharedPreferences.getString("PlayerGender", "male");
+        soundEnabled = sharedPreferences.getBoolean("soundEnabled", true);
 
         Intent intent = getIntent();
         if (intent != null && intent.hasExtra("table_no")) {
@@ -2044,9 +2045,12 @@ public class LocalGameActivity extends Activity {
     }
 
     private void toggleSound() {
-        soundEnabled = !soundEnabled;
-        setupGameBoard(true);
-        addLog("音效已" + (soundEnabled ? "开启" : "关闭"));
+        SoundSettingsDialog.show(this, new Runnable() {
+            @Override
+            public void run() {
+                setupGameBoard(true);
+            }
+        });
     }
 
     private void resetSelectionState() {

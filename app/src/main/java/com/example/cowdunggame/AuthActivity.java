@@ -20,6 +20,7 @@ import android.view.View;
 import android.widget.Button;
 import android.widget.EditText;
 import android.widget.FrameLayout;
+import android.widget.ImageView;
 import android.widget.LinearLayout;
 import android.widget.TextView;
 import android.widget.Toast;
@@ -63,6 +64,21 @@ public class AuthActivity extends Activity {
         FrameLayout root = new FrameLayout(this);
         root.setBackgroundColor(Color.WHITE);
 
+        // 背景图（注册/登录页共用）
+        ImageView bgImage = new ImageView(this);
+        bgImage.setImageResource(R.drawable.auth_bg);
+        bgImage.setScaleType(ImageView.ScaleType.CENTER_CROP);
+        bgImage.setLayoutParams(new FrameLayout.LayoutParams(
+                FrameLayout.LayoutParams.MATCH_PARENT, FrameLayout.LayoutParams.MATCH_PARENT));
+        root.addView(bgImage);
+
+        // 半透明蒙层，保证黑色文字在背景图上清晰可读
+        View bgOverlay = new View(this);
+        bgOverlay.setBackgroundColor(0x99FFFFFF);
+        bgOverlay.setLayoutParams(new FrameLayout.LayoutParams(
+                FrameLayout.LayoutParams.MATCH_PARENT, FrameLayout.LayoutParams.MATCH_PARENT));
+        root.addView(bgOverlay);
+
         LinearLayout card = new LinearLayout(this);
         card.setOrientation(LinearLayout.VERTICAL);
         card.setGravity(Gravity.CENTER_HORIZONTAL);
@@ -73,6 +89,17 @@ public class AuthActivity extends Activity {
         cardParams.gravity = Gravity.CENTER;
         card.setLayoutParams(cardParams);
         root.addView(card);
+
+        // 标题上方的小白花装饰
+        ImageView flower = new ImageView(this);
+        flower.setImageResource(R.drawable.white_flower);
+        flower.setScaleType(ImageView.ScaleType.FIT_CENTER);
+        int fw = (int) (screenW * 0.20f);
+        LinearLayout.LayoutParams flp = new LinearLayout.LayoutParams(fw, fw);
+        flp.gravity = Gravity.CENTER_HORIZONTAL;
+        flp.bottomMargin = dp(6);
+        flower.setLayoutParams(flp);
+        card.addView(flower);
 
         TextView title = new TextView(this);
         title.setText("鲜花与牛粪");

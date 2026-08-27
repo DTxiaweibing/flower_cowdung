@@ -61,6 +61,27 @@ public class MenuActivity extends Activity {
         title.setLayoutParams(titleParams);
         root.addView(title);
 
+        // 声音设置入口（右上角）：弹出"音效 / 音乐"两个独立开关
+        Button btnSound = new Button(this);
+        btnSound.setText("🔊");
+        btnSound.setTextSize(18);
+        btnSound.setAllCaps(false);
+        btnSound.setTextColor(Color.WHITE);
+        btnSound.setBackground(btnBg());
+        FrameLayout.LayoutParams soundParams = new FrameLayout.LayoutParams(
+                (int) (screenW * 0.12f), (int) (screenW * 0.12f));
+        soundParams.gravity = Gravity.TOP | Gravity.RIGHT;
+        soundParams.topMargin = (int) (screenH * 0.03f);
+        soundParams.rightMargin = (int) (screenW * 0.03f);
+        btnSound.setLayoutParams(soundParams);
+        btnSound.setOnClickListener(new View.OnClickListener() {
+            @Override
+            public void onClick(View v) {
+                SoundSettingsDialog.show(MenuActivity.this, null);
+            }
+        });
+        root.addView(btnSound);
+
         // 排行榜入口（标题正下方，无边框透明按钮）
         Button btnRank = new Button(this);
         btnRank.setText("排行榜");
