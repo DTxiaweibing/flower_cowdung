@@ -156,8 +156,7 @@ public class AuthActivity extends Activity {
         pwRow.setOrientation(LinearLayout.HORIZONTAL);
         pwRow.setGravity(Gravity.CENTER_VERTICAL);
         pwRow.setBackground(editBg());
-        int pwPad = dp(10);
-        pwRow.setPadding(pwPad, pwPad, pwPad, pwPad);
+        pwRow.setPadding(0, 0, 0, 0);
 
         etPassword.setBackground(null);
         LinearLayout.LayoutParams etLp = new LinearLayout.LayoutParams(

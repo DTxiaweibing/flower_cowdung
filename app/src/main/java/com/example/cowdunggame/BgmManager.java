@@ -33,6 +33,7 @@ public class BgmManager {
             player = MediaPlayer.create(appContext, R.raw.bgm);
             if (player == null) return;
             player.setLooping(true);
+            player.setVolume(0.4f, 0.4f); // 背景音乐音量低于音效，避免盖过短音效
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) {
                 player.setAudioAttributes(new AudioAttributes.Builder()
                         .setUsage(AudioAttributes.USAGE_GAME)
