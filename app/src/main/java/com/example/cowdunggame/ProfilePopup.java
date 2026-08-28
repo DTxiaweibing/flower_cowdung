@@ -20,6 +20,12 @@ public class ProfilePopup {
             "新兵", "士兵", "班长", "排长", "连长", "营长", "团长", "旅长", "司令", "军长", "元帅"
     };
 
+    // 当前显示的资料卡（静态引用，确保新弹窗取消上一次的定时关闭，避免叠加/跨 Activity 短持有）
+    private static Handler sHandler;
+    private static Runnable sDismiss;
+    private static View sOverlay;
+    private static ViewGroup sContent;
+
     public static String levelName(int score) {
         int idx = score / 200;
         if (idx < 0) idx = 0;
@@ -102,20 +108,33 @@ public class ProfilePopup {
         overlay.addView(box);
         content.addView(overlay);
 
-        final Handler h = new Handler(Looper.getMainLooper());
-        final Runnable dismiss = new Runnable() {
+        // 取消上一次未触发的自动隐藏，并移除可能残留的旧弹窗（防止叠加/跨 Activity 泄漏）
+        if (sHandler != null && sDismiss != null) {
+            sHandler.removeCallbacks(sDismiss);
+            if (sOverlay != null && sContent != null && sOverlay.getParent() != null) {
+                sContent.removeView(sOverlay);
+            }
+        }
+        sOverlay = overlay;
+        sContent = content;
+        sHandler = new Handler(Looper.getMainLooper());
+        sDismiss = new Runnable() {
             @Override
             public void run() {
-                if (overlay.getParent() != null) content.removeView(overlay);
+                if (sOverlay != null && sContent != null && sOverlay.getParent() != null) {
+                    sContent.removeView(sOverlay);
+                }
+                sOverlay = null;
+                sContent = null;
             }
         };
-        h.postDelayed(dismiss, 5000); // 5 秒无操作自动隐藏
+        sHandler.postDelayed(sDismiss, 5000); // 5 秒无操作自动隐藏
 
         // 任何点击立即关闭
         overlay.setOnClickListener(new View.OnClickListener() {
             @Override
             public void onClick(View v) {
-                h.removeCallbacks(dismiss);
+                if (sHandler != null && sDismiss != null) sHandler.removeCallbacks(sDismiss);
                 if (overlay.getParent() != null) content.removeView(overlay);
             }
         });

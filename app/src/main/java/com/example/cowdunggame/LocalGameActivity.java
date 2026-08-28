@@ -101,7 +101,9 @@ public class LocalGameActivity extends Activity {
         @Override
         public void onClick(View v) {
             String uid = (v == tvPlayerName) ? tvPlayerNameId : tvComputerNameId;
-            if (uid != null && !uid.isEmpty()) openProfile(uid);
+            String name = (v == tvPlayerName) ? tvPlayerName.getText().toString()
+                                              : tvComputerName.getText().toString();
+            if (uid != null && !uid.isEmpty()) openProfile(uid, name);
         }
     };
     private String pvpBNick = "等待对手入座..."; // B 侧昵称
@@ -132,6 +134,9 @@ public class LocalGameActivity extends Activity {
     private Runnable hintRunnable;
     private String hintMessage = "";
     private boolean hintShowing = false;
+
+    private Handler popupHandler;      // 观众列表弹窗 5 秒自动隐藏
+    private PopupWindow watcherPopup;  // 观众列表弹窗（销毁时关闭，避免销毁后 dismiss 异常）
 
     private SoundPool soundPool;
     private int soundDida;
@@ -1346,23 +1351,28 @@ public class LocalGameActivity extends Activity {
     }
 
     // 打开玩家资料卡（点昵称弹出半屏圆角弹窗，白底黑字，悬浮在棋盘/日志区，5 秒自动隐藏）
-    private void openProfile(String uid) {
+    // 点昵称即时弹出资料卡（先用界面已有昵称秒显），再异步仅拉一次 getUserRank 刷新排名/积分
+    private void openProfile(String uid, String knownName) {
+        final String name = (knownName != null && !knownName.isEmpty()) ? knownName : "无名";
+        // 立即展示（占位数据），避免等待两轮网络请求造成的卡顿
+        ProfilePopup.show(LocalGameActivity.this, name, 0, 0, 0, 0, false, logLayout);
         if (uid == null || uid.isEmpty() || client == null) return;
         final String fid = uid;
         new Thread(new Runnable() {
             @Override
             public void run() {
-                final org.json.JSONObject p = client.getProfile(fid);
                 final org.json.JSONObject rk = client.getUserRank(fid);
-                final int rank = rk != null ? rk.optInt("rank", 0) : 0;
+                if (rk == null) return;
+                final int rank = rk.optInt("rank", 0);
+                final int score = rk.optInt("score", 0);
+                final int wins = rk.optInt("wins", 0);
+                final int losses = rk.optInt("losses", 0);
                 runOnUiThread(new Runnable() {
                     @Override
                     public void run() {
-                        if (p == null) return;
-                        ProfilePopup.show(LocalGameActivity.this,
-                                p.optString("nickname", ""), p.optInt("score", 0), rank,
-                                p.optInt("wins", 0), p.optInt("losses", 0),
-                                false, logLayout);
+                        // 用真实数据刷新（ProfilePopup 静态 handler 会取消上一次并替换弹窗）
+                        ProfilePopup.show(LocalGameActivity.this, name, score, rank,
+                                wins, losses, false, logLayout);
                     }
                 });
             }
@@ -1537,17 +1547,17 @@ public class LocalGameActivity extends Activity {
         int popupH = (maxAllowed != ViewGroup.LayoutParams.WRAP_CONTENT)
                 ? Math.min(desiredH, maxAllowed) : desiredH;
 
-        final PopupWindow popup = new PopupWindow(sv, popupW, popupH, true);
-        popup.setOutsideTouchable(true);
-        popup.setFocusable(true);
-        popup.setElevation(dp(8));
+        watcherPopup = new PopupWindow(sv, popupW, popupH, true);
+        watcherPopup.setOutsideTouchable(true);
+        watcherPopup.setFocusable(true);
+        watcherPopup.setElevation(dp(8));
 
         // 5 秒无操作自动隐藏
-        final Handler popupHandler = new Handler(Looper.getMainLooper());
+        popupHandler = new Handler(Looper.getMainLooper());
         popupHandler.postDelayed(new Runnable() {
             @Override
             public void run() {
-                if (popup.isShowing()) popup.dismiss();
+                if (watcherPopup != null && watcherPopup.isShowing()) watcherPopup.dismiss();
             }
         }, 5000);
 
@@ -1557,9 +1567,9 @@ public class LocalGameActivity extends Activity {
             int logW = logLayout.getWidth();
             int x = loc[0] + (logW - popupW) / 2;
             int y = loc[1];
-            popup.showAtLocation(logLayout, Gravity.TOP | Gravity.LEFT, x, y);
+            watcherPopup.showAtLocation(logLayout, Gravity.TOP | Gravity.LEFT, x, y);
         } else {
-            popup.showAtLocation(findViewById(android.R.id.content),
+            watcherPopup.showAtLocation(findViewById(android.R.id.content),
                     Gravity.TOP | Gravity.LEFT, popupW / 2, dp(80));
         }
     }
@@ -2132,6 +2142,10 @@ public class LocalGameActivity extends Activity {
         countdownHandler.removeCallbacksAndMessages(null);
         hintHandler.removeCallbacksAndMessages(null);
         watchHandler.removeCallbacksAndMessages(null);
+        // 清理未在上面的「统一清理」列表中、且仍可能持有 Activity 的延时任务
+        if (rowsContainer != null) rowsContainer.removeCallbacks(null);
+        if (popupHandler != null) popupHandler.removeCallbacksAndMessages(null);
+        if (watcherPopup != null && watcherPopup.isShowing()) watcherPopup.dismiss();
         stopChat();
         if (seatManager != null) {
             seatManager.stopHeartbeat();
