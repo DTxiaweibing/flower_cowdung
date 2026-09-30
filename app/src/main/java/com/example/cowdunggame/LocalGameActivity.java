@@ -125,6 +125,8 @@ public class LocalGameActivity extends Activity {
 
     // 本局落子记录（每步上报数据库供观战重放）
     private JSONArray moveList = new JSONArray();
+    // 最近一次轮询拿到的服务端权威棋谱。上报前要用它对齐，否则会把对方那几步覆盖掉
+    private JSONArray lastServerMoves = new JSONArray();
 
     private TextView tvPlayerName;
     private TextView tvComputerName;
@@ -557,15 +559,21 @@ public class LocalGameActivity extends Activity {
         return iAmLeftSide() ? tvComputerCountdown : tvPlayerCountdown;
     }
 
-    // 手指显示在行动方的「对面」那一侧：轮到我走棋时，对手的手指指着我；
-    // 轮到对手走棋时，我的手指指着对手。倒计时和手指分处左右两个格子，不会重叠。
-    private void updateTurnFinger(String turn) {
-        boolean leftTurn = "a".equals(turn);
+    // 手指可见性只有一个归属函数，每次渲染都无条件调用，手指位置因此是当前状态的纯函数。
+    // 规则：playing 中恒显示，且只亮「非行动方」那一侧的手指（手指朝向对手，不朝自己）：
+    // A 回合亮右侧(B)的手，B 回合亮左侧(A)的手。
+    // 以前只在「我的回合发生翻转」时才调一次，startCountdown 里又写了一遍不同公式，
+    // stopCountdown 还会把两边一起藏掉，导致手指时有时无、方向也说不清。
+    private void updateTurnFinger(String status, String turn) {
+        boolean playing = "ongoing".equals(status);
+        boolean aTurn = "a".equals(turn);
+        boolean showLeft = playing && !aTurn;
+        boolean showRight = playing && aTurn;
         if (imgPlayerFinger != null) {
-            imgPlayerFinger.setVisibility(leftTurn ? View.INVISIBLE : View.VISIBLE);
+            imgPlayerFinger.setVisibility(showLeft ? View.VISIBLE : View.INVISIBLE);
         }
         if (imgComputerFinger != null) {
-            imgComputerFinger.setVisibility(leftTurn ? View.VISIBLE : View.INVISIBLE);
+            imgComputerFinger.setVisibility(showRight ? View.VISIBLE : View.INVISIBLE);
         }
     }
 
@@ -667,6 +675,8 @@ public class LocalGameActivity extends Activity {
         if (btnExitGame != null) {
             btnExitGame.setVisibility("ongoing".equals(gsStatus) ? View.GONE : View.VISIBLE);
         }
+        // 手指每次渲染都重算一遍，不依赖「回合翻转」这种偶发事件
+        updateTurnFinger(gsStatus, gs.optString("turn", ""));
 
         // 日志与观战共用同一个渲染器：两位玩家和所有观众看到的内容完全一致
         boolean readyA = "a".equals(table.optString("ready_a", "false"))
@@ -739,6 +749,7 @@ public class LocalGameActivity extends Activity {
                 settled = false; // 新一局重新结算积分
                 pvpLogMoveCount = 0;
                 moveList = new JSONArray();
+                lastServerMoves = new JSONArray();
                 hideResultImage();
                 // 从数据库还原棋盘（开局 1..6）
                 JSONArray flowers = gs.optJSONArray("flowers");
@@ -757,7 +768,6 @@ public class LocalGameActivity extends Activity {
                 btnAction.setText(isPlayerTurn ? "确认选择" : "对方回合中...");
                 stopCountdown();
                 setupGameBoard(isPlayerTurn);
-                updateTurnFinger(turn);
                 if (isPlayerTurn) startCountdown(true, PLAYER_TURN_SECONDS);
             } else {
                 // 同步对方落子后的棋盘 & 回合
@@ -765,6 +775,11 @@ public class LocalGameActivity extends Activity {
                 // 增量补记对方落子：只用来判断要不要播音效，
                 // 落子文字由统一日志渲染器从 game_state 生成，不在这里追加
                 JSONArray gsMoves = gs.optJSONArray("moves");
+                if (gsMoves != null) {
+                    // 记住服务端权威棋谱：轮询到对方落子时只播音效、不写进 moveList，
+                    // moveList 始终只是「我走过的那几步」，上报前靠它补齐对方部分
+                    lastServerMoves = gsMoves;
+                }
                 if (gsMoves != null && gsMoves.length() > pvpLogMoveCount) {
                     boolean opponentMoved = false;
                     for (int i = pvpLogMoveCount; i < gsMoves.length(); i++) {
@@ -791,7 +806,6 @@ public class LocalGameActivity extends Activity {
                     btnAction.setText(isPlayerTurn ? "确认选择" : "对方回合中...");
                     stopCountdown();
                     setupGameBoard(isPlayerTurn);
-                    updateTurnFinger(turn);
                     if (isPlayerTurn) startCountdown(true, PLAYER_TURN_SECONDS);
                 }
             }
@@ -828,6 +842,7 @@ public class LocalGameActivity extends Activity {
         JSONArray moves = gs.optJSONArray("moves");
 
         if ("ongoing".equals(gsStatus) || "finished".equals(gsStatus)) {
+            int moveCount = 0;
             if (moves != null) {
                 for (int i = 0; i < moves.length(); i++) {
                     JSONObject m = moves.optJSONObject(i);
@@ -839,6 +854,14 @@ public class LocalGameActivity extends Activity {
                     sb.append("a".equals(side) ? aName : bName)
                       .append("拿走了第").append(row + 1)
                       .append("排的").append(count).append("朵鲜花\n");
+                    // 每落一手就播报下一手是谁，和人机日志「谁走完→提示轮到谁」同节奏。
+                    // 以前只在最后补一句总的回合提示，中间过程看不到换手，
+                    // 两边就都只显得出先入座那人的记录。
+                    String nextSide = "a".equals(side) ? "b" : "a";
+                    sb.append("系统提示：轮到 ")
+                      .append("a".equals(nextSide) ? aName : bName)
+                      .append(" 的回合\n");
+                    moveCount++;
                 }
             }
             if ("finished".equals(gsStatus)) {
@@ -852,7 +875,8 @@ public class LocalGameActivity extends Activity {
                     sb.append("平局\n");
                 }
                 sb.append("等待双方准备下一局\n");
-            } else {
+            } else if (moveCount == 0) {
+                // 已进入对局但还没有落子（极少见）：仍要报出当前轮到谁
                 sb.append("\n系统提示：轮到 ")
                   .append("a".equals(turn) ? aName : bName).append(" 的回合\n");
             }
@@ -1048,12 +1072,8 @@ public class LocalGameActivity extends Activity {
         renderPvpLog(gs, aNick, bNick, readyA, readyB);
 
         String gsStatus = gs.optString("status", "");
-        if ("ongoing".equals(gsStatus)) {
-            updateTurnFinger(gs.optString("turn", ""));
-        } else {
-            if (imgPlayerFinger != null) imgPlayerFinger.setVisibility(View.INVISIBLE);
-            if (imgComputerFinger != null) imgComputerFinger.setVisibility(View.INVISIBLE);
-        }
+        // 手指不受分支控制：playing 就按当前 turn 亮一侧，非 playing 两边都灭
+        updateTurnFinger(gsStatus, gs.optString("turn", ""));
         hideResultImage();
     }
 
@@ -1283,6 +1303,10 @@ public class LocalGameActivity extends Activity {
             addLog(getPlayerName(), "拿走了第" + (selectedRow + 1) + "排的" + selectedCount + "朵鲜花");
         }
         if (isPvp || isRoom) {
+            // 上报前先以服务端棋谱为准再叠加我这步。moveList 只装得下「我自己走过的那几步」，
+            // 以前直接整包上传，会把对方那几步从 game_state.moves 里抹掉，
+            // 于是日志里只剩先入座的人有记录。
+            syncMoveListFromServer();
             appendMove(mySide == null ? "b" : mySide, selectedRow, selectedCount);
             pvpLogMoveCount = moveList.length(); // 我的这步已本地记录，轮询时跳过
         } else {
@@ -1472,6 +1496,21 @@ public class LocalGameActivity extends Activity {
                 client.pveEnd(tableNo);
             }
         });
+    }
+
+    // 上报前把本地棋谱对齐到服务端版本：服务端那份已经包含双方全部落子，
+    // 本地 moveList 只是「我走过的那几步」。只在服务端步数不少于本地时才替换，
+    // 避免刚开局还没轮询到就用空数组把已有记录冲掉。
+    private void syncMoveListFromServer() {
+        try {
+            if (lastServerMoves == null || lastServerMoves.length() < moveList.length()) return;
+            JSONArray merged = new JSONArray();
+            for (int i = 0; i < lastServerMoves.length(); i++) {
+                JSONObject m = lastServerMoves.optJSONObject(i);
+                if (m != null) merged.put(m);
+            }
+            moveList = merged;
+        } catch (Exception ignore) { }
     }
 
     // 记录一步落子（player 或 computer），供整包上报
@@ -1937,14 +1976,16 @@ public class LocalGameActivity extends Activity {
         final TextView other = playerSide ? opponentCountdownView() : myCountdownView();
         other.setVisibility(View.INVISIBLE);
         tv.setVisibility(View.VISIBLE);
-        // 倒计时挂在行动方这一侧；手指挂「对面」那一侧（对手的手指指着我）。
-        // 两者在左右两个独立格子里，所以不会和倒计时文字重叠。
-        boolean actingIsLeft = playerSide ? iAmLeftSide() : !iAmLeftSide();
-        if (imgPlayerFinger != null) {
-            imgPlayerFinger.setVisibility(actingIsLeft ? View.INVISIBLE : View.VISIBLE);
-        }
-        if (imgComputerFinger != null) {
-            imgComputerFinger.setVisibility(actingIsLeft ? View.VISIBLE : View.INVISIBLE);
+        // 人机保留原来的手指表现；人人和房间交给 updateTurnFinger 单一负责，
+        // 这里再写一遍会用计时器的公式覆盖掉「行动方对面」这条规则。
+        if (!isPvp && !isRoom) {
+            boolean actingIsLeft = playerSide ? iAmLeftSide() : !iAmLeftSide();
+            if (imgPlayerFinger != null) {
+                imgPlayerFinger.setVisibility(actingIsLeft ? View.INVISIBLE : View.VISIBLE);
+            }
+            if (imgComputerFinger != null) {
+                imgComputerFinger.setVisibility(actingIsLeft ? View.VISIBLE : View.INVISIBLE);
+            }
         }
         updateCountdownText(tv);
         countdownRunnable = new Runnable() {
