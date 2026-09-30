@@ -199,13 +199,21 @@ public class SupabaseClient {
         saveSession();
     }
 
+    // 刷新锁：轮询 / 心跳 / 聊天 / 资料卡 会从多个线程同时调 ensureFreshToken。
+    // Supabase 的 refresh_token 是一次性轮换的，并发刷新时后到的请求会拿着已失效的
+    // 旧 refresh_token 拿到 400，导致 ensureFreshToken 误报 false、请求被静默丢弃。
+    private final Object tokenLock = new Object();
+
     public boolean ensureFreshToken() {
         if (accessToken == null) return false;
         long now = System.currentTimeMillis() / 1000;
-        if (accessTokenExp - now < 30) {
+        if (accessTokenExp - now >= 30) return true;
+        synchronized (tokenLock) {
+            // 等锁期间可能已被别的线程刷新过，先复判再决定要不要真的发刷新请求
+            if (accessToken == null) return false;
+            if (accessTokenExp - System.currentTimeMillis() / 1000 >= 30) return true;
             return refreshSession().ok;
         }
-        return true;
     }
 
     public static class RpcResult {
@@ -550,15 +558,25 @@ public class SupabaseClient {
         return null;
     }
 
-    // ===== 聊天消息（对战/人机/私密房间共用，按 table_id 隔离）=====
+    // ===== 聊天消息（人机/人人/私密房间共用，按 scope 隔离）=====
+    // scope 形如 'pve:3' / 'pvp:3' / 'room:1234'，带模式前缀避免跨模式撞桌号。
+    // 桌内最后一名玩家离席时，chat_messages 里该 scope 的行由服务端触发器整桌删除。
+
+    private static String enc(String s) {
+        try {
+            return java.net.URLEncoder.encode(s, "UTF-8");
+        } catch (Exception e) {
+            return s;
+        }
+    }
 
     // 发送一条聊天。返回是否成功写入。
-    public boolean sendChat(String tableId, String senderId, String senderName, String message) {
-        if (tableId == null || message == null || message.isEmpty()) return false;
+    public boolean sendChat(String scope, String senderId, String senderName, String message) {
+        if (scope == null || message == null || message.isEmpty()) return false;
         if (!ensureFreshToken() || accessToken == null) return false;
         try {
             JSONObject body = new JSONObject();
-            body.put("table_id", tableId);
+            body.put("table_id", scope);
             if (senderId != null) body.put("sender_id", senderId);
             if (senderName != null) body.put("sender_name", senderName);
             body.put("message", message);
@@ -570,13 +588,13 @@ public class SupabaseClient {
     }
 
     // 拉取某桌 id > lastId 的新消息（升序），用于轮询增量。
-    public JSONArray fetchChatAfter(String tableId, long lastId) {
-        if (tableId == null) return null;
+    public JSONArray fetchChatAfter(String scope, long lastId) {
+        if (scope == null) return null;
         if (!ensureFreshToken() || accessToken == null) return null;
         try {
             String url = PROJECT_URL + "/rest/v1/chat_messages"
                     + "?select=id,sender_id,sender_name,message,created_at"
-                    + "&table_id=eq." + tableId
+                    + "&table_id=eq." + enc(scope)
                     + "&id=gt." + lastId
                     + "&order=id.asc&limit=200";
             return getArray(url);
@@ -585,14 +603,15 @@ public class SupabaseClient {
         }
     }
 
-    // 拉取某桌最近 limit 条历史（降序，最新在前），进入桌子时初始化用。
-    public JSONArray fetchChatHistory(String tableId, int limit) {
-        if (tableId == null) return null;
+    // 拉取某桌最近 limit 条历史（降序，最新在前），聊天开启时初始化用。
+    // 清场后本桌必然为空，所以正常情况下这里拿不到任何上一局的消息。
+    public JSONArray fetchChatHistory(String scope, int limit) {
+        if (scope == null) return null;
         if (!ensureFreshToken() || accessToken == null) return null;
         try {
             String url = PROJECT_URL + "/rest/v1/chat_messages"
                     + "?select=id,sender_id,sender_name,message,created_at"
-                    + "&table_id=eq." + tableId
+                    + "&table_id=eq." + enc(scope)
                     + "&order=id.desc&limit=" + limit;
             return getArray(url);
         } catch (Exception e) {
