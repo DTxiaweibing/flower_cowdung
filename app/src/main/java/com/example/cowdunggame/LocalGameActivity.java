@@ -139,6 +139,17 @@ public class LocalGameActivity extends Activity {
     private Handler countdownHandler = new Handler(Looper.getMainLooper());
     private Runnable countdownRunnable;
     private int countdownSeconds;
+    // 人人/私密房间倒计时的基线，单位秒。-1 = 本回合还没从服务端拿到。
+    private volatile int serverSecsLeft = -1;
+    // 上面那个基线是在「当时那一刻」取到的，这里记下那一刻的单调时钟读数，
+    // 之后每 tick 用经过的真实时间算剩余。
+    //
+    // 不能每秒 --countdownSeconds：基线在本回合内是常量，拿它每秒做一次
+    // 「和当前值比对，不等就重置」会导致 60→59→拉回60→59 无限抖动。
+    // 也不能直接减去数墙钟：设备时间可被改。
+    // elapsedRealtime 是单调的（含设备休眠时长），改系统时间不影响它，
+    // Handler 被冻结后补跑时经过的时长也算得进去。
+    private volatile long serverBaselineMs = 0L;
 
     private Handler hintHandler = new Handler(Looper.getMainLooper());
     private Runnable hintRunnable;
@@ -157,6 +168,9 @@ public class LocalGameActivity extends Activity {
 
     private ImageView resultImage;
 
+    // 人机玩家每回合 180 秒。人人桌/私密房间不用这个值：真实秒数由服务端
+    // turn_secs_left 返回（60 秒，见 fix_round_lifecycle.sql 的 pvp_turn_seconds），
+    // 这里只在拉取失败时兜底显示。
     private static final int PLAYER_TURN_SECONDS = 180;
     private static final int COMPUTER_THINK_SECONDS = 5;
 
@@ -614,6 +628,22 @@ public class LocalGameActivity extends Activity {
                 runOnUiThread(new Runnable() {
                     @Override
                     public void run() {
+                        // 轮询日志：确认每 2 秒真的在跑，以及服务端返回的
+                        // game_state.status / winner 到底是什么。判负后如果这里
+                        // 一直看不到 finished，说明是服务端没写进来（而非界面没渲染）。
+                        if (table == null) {
+                            Log.d("TurnDebug", "poll table=null");
+                        } else {
+                            JSONObject gs = table.optJSONObject("game_state");
+                            Log.d("TurnDebug", "poll st=" + table.optString("status", "?")
+                                    + " gs=" + (gs == null ? "null"
+                                        : gs.optString("status", "?") + "/winner="
+                                          + gs.optString("winner", "")
+                                          + "/timeout=" + gs.optString("timeout", "")
+                                          + "/scored=" + gs.optString("scored", ""))
+                                    + " deadline=" + table.optString("turn_deadline_at", "null")
+                                    + " resultShown=" + pvpResultShown);
+                        }
                         renderPvpState(table);
                     }
                 });
@@ -688,6 +718,9 @@ public class LocalGameActivity extends Activity {
         if ("finished".equals(gsStatus)) {
             // 胜负已定：winner 'a'/'b'
             String winner = gs.optString("winner", "");
+            Log.d("TurnDebug", "GOT finished winner=" + winner
+                    + " mySide=" + mySide + " timeout=" + gs.optString("timeout", "")
+                    + " resultShown=" + pvpResultShown + " settled=" + settled);
             boolean iWon = winner.equals(mySide);
             // 积分结算（人人 +5/-1，私密 +10/-2），仅结算一次
             if (!settled) {
@@ -766,9 +799,13 @@ public class LocalGameActivity extends Activity {
                 resetSelectionState();
                 btnAction.setEnabled(isPlayerTurn);
                 btnAction.setText(isPlayerTurn ? "确认选择" : "对方回合中...");
+                // 每次开局先把服务端的剩余秒数取回来，再起本地显示用的计时器。
+                // 取不到（网络抖动）就退回 PLAYER_TURN_SECONDS 兜底，
+                // 数字照走，判负仍由服务端负责。
+                refreshServerSecsLeft();
                 stopCountdown();
                 setupGameBoard(isPlayerTurn);
-                if (isPlayerTurn) startCountdown(true, PLAYER_TURN_SECONDS);
+                if (isPlayerTurn) startCountdown(true, serverSecsLeftOrDefault());
             } else {
                 // 同步对方落子后的棋盘 & 回合
                 String turn = gs.optString("turn", "");
@@ -804,9 +841,10 @@ public class LocalGameActivity extends Activity {
                     resetSelectionState();
                     btnAction.setEnabled(isPlayerTurn);
                     btnAction.setText(isPlayerTurn ? "确认选择" : "对方回合中...");
+                    refreshServerSecsLeft();
                     stopCountdown();
                     setupGameBoard(isPlayerTurn);
-                    if (isPlayerTurn) startCountdown(true, PLAYER_TURN_SECONDS);
+                    if (isPlayerTurn) startCountdown(true, serverSecsLeftOrDefault());
                 }
             }
         } else {
@@ -1921,7 +1959,12 @@ public class LocalGameActivity extends Activity {
             } else {
                 seatManager.pvpLeave(tableNo, null);
             }
-            reportPvpState("finished", "", ("a".equals(mySide) ? "b" : "a"));
+            // 这里不再补一次 reportPvpState("finished", 对手)：
+            // pvp_leave / room_leave 服务端已经写好 finished 并立即结算，
+            // 那次上报是纯冗余。而且它和 leave 并发发出，谁先到不确定 ——
+            // 要是它先到，report_state 会看到「未超时的判负声明」而按
+            // NOT_EXPIRED 拒绝（见 fix_round_lifecycle.sql 的回合判负校验）。
+            // 退出判负只由 leave 一个入口负责，没有第二条路。
         } else {
             final JSONObject finalState = buildFinalState();
             seatManager.forfeitAndLeave(tableNo, finalState, null);
@@ -1980,8 +2023,20 @@ public class LocalGameActivity extends Activity {
     }
 
     // ===== 回合倒计时 =====
+    // 当前倒计时挂在哪一侧。服务端剩余秒数是异步取回来的，取回时需要知道
+    // 该把倒计时重新起到谁身上（见 restartCountdownAfterServerValue）。
+    private Boolean countdownPlayerSide;
+    // 归零只打一次日志：停在 0 之后每秒都会重进那个分支。
+    private boolean countdownZeroLogged;
+
     private void startCountdown(final boolean playerSide, int seconds) {
         stopCountdown();
+        countdownPlayerSide = playerSide;
+        countdownZeroLogged = false;
+        // 人人/私密房间的倒计时不靠这个值判负，只是给玩家一个「还剩多久」的
+        // 提示；判负由服务端 reap_turn_timeouts 执行。真正驱动显示的是
+        // serverSecsLeft（每轮询刷新）。这里保留本地自减作为兜底：
+        // 轮询失败时数字仍在走，总比卡住不动好。
         countdownSeconds = seconds;
         // 倒计时挂在「我」所在的那一侧：我是后入座(B)时跑右格，不是左格
         final TextView tv = playerSide ? myCountdownView() : opponentCountdownView();
@@ -1999,27 +2054,63 @@ public class LocalGameActivity extends Activity {
                 imgComputerFinger.setVisibility(actingIsLeft ? View.VISIBLE : View.INVISIBLE);
             }
         }
+        // 人人/房间：数字由「服务端基线 + 单调时钟经过时间」算出，本地不逐秒自减。
+        // 本地到点不判负、不上报、不改界面 —— 判负只由服务端 reap_turn_timeouts
+        // 执行，客户端这边等轮询把 finished 拉回来（和对手走的是同一条路径，
+        // 所以本机被冻结 3 分钟回来看到的是「已判负」，而不是假装的 0:00）。
+        final boolean serverAuthoritative = isPvp || isRoom;
+        if (serverAuthoritative) {
+            countdownSeconds = serverSecsLeftOrDefault();
+            Log.d("TurnDebug", "startCountdown side=" + playerSide
+                    + " isPvp=" + isPvp + " isRoom=" + isRoom
+                    + " serverSecsLeft=" + serverSecsLeft
+                    + " computed=" + countdownSeconds
+                    + " baselineMs=" + serverBaselineMs);
+            if (countdownSeconds < 0) {
+                // 还没拿到服务端剩余秒数。不显示倒计时，等 RPC 回来
+                // （refreshServerSecsLeft 的回调会重进这里）再起。
+                // 直接用 180 兜底会先闪一个「3:00」再跳成「1:00」。
+                tv.setVisibility(View.INVISIBLE);
+                return;
+            }
+        }
         updateCountdownText(tv);
         countdownRunnable = new Runnable() {
             @Override
             public void run() {
-                countdownSeconds--;
+                if (serverAuthoritative) {
+                    // 每 tick 重算，不做「和快照比对再重置」——
+                    // 那样会和常量基线互相拉扯，数字在两三个值之间来回抖。
+                    countdownSeconds = serverSecsLeftOrDefault();
+                } else if (countdownSeconds > 0) {
+                    countdownSeconds--;
+                }
                 if (countdownSeconds <= 0) {
                     updateCountdownText(tv);
+                    if (serverAuthoritative) {
+                        // 停在 0，不在本地判定胜负。但要请服务端看一眼该不该判：
+                        // cron 兜底是每分钟一次（本实例 pg_cron 不支持秒位），
+                        // 只等它会白等最多一分钟。
+                        //
+                        // 这里只是「戳一下」，判负条件全在服务端
+                        // （request_turn_timeout_check 内部）：deadline 已过、
+                        // current_turn 未变、对手心跳 60 秒内，缺一不判。
+                        // 戳完立刻拉一次表，让结果尽快上屏，不用等下一个 2 秒轮询。
+                        if (!countdownZeroLogged) {
+                            countdownZeroLogged = true;
+                            Log.d("TurnDebug", "countdown hit 0, asking server. polling="
+                                    + watchHandler.hasCallbacks(watchRunnable));
+                            requestServerTimeoutCheck();
+                        }
+                        tv.setVisibility(View.INVISIBLE);
+                        return;
+                    }
+                    // 人机没有服务端回合概念，仍由本地判负
                     tv.setVisibility(View.INVISIBLE);
                     if (playerSide) {
-                        if (isPvp || isRoom) {
-                            final String mySideFinal = mySide;
-                            addLog(pvpMyName() + "的回合超时，判负，"
-                                + pvpNameOf("a".equals(mySideFinal) ? "b" : "a") + " 赢了。");
-                            reportPvpState("finished", "",
-                                ("a".equals(mySideFinal) ? "b" : "a"));
-                            endPvpGame(false);
-                        } else {
-                            addLog(getPlayerName() + "的回合超时，判负，电脑赢了。");
-                            reportState("finished", "", "computer");
-                            endGame(false);
-                        }
+                        addLog(getPlayerName() + "的回合超时，判负，电脑赢了。");
+                        reportState("finished", "", "computer");
+                        endGame(false);
                     }
                     return;
                 }
@@ -2039,6 +2130,118 @@ public class LocalGameActivity extends Activity {
         if (tvComputerCountdown != null) tvComputerCountdown.setVisibility(View.INVISIBLE);
         if (imgPlayerFinger != null) imgPlayerFinger.setVisibility(View.INVISIBLE);
         if (imgComputerFinger != null) imgComputerFinger.setVisibility(View.INVISIBLE);
+    }
+
+    // 拉服务端算好的本轮剩余秒数（人人桌 / 私密房间），并把单调时钟基线对齐到此刻。
+    // 拉不到就保持原值不动：倒计时继续用上一次的值走，判负本来也不靠它。
+    private void refreshServerSecsLeft() {
+        if (!isPvp && !isRoom) return;
+        if (isWatcher || client == null || tableNo == null) return;
+        final String tId = isRoom ? null : tableNo;
+        final String rCode = isRoom ? tableNo : null;
+        // 换回合了：旧基线作废，等这次的服务器值回来再重建。
+        serverSecsLeft = -1;
+        serverBaselineMs = 0L;
+        async(new Runnable() {
+            @Override
+            public void run() {
+                final int left = client.turnSecsLeft(tId, rCode);
+                if (left < 0) return;
+                runOnUiThread(new Runnable() {
+                    @Override
+                    public void run() {
+                        serverSecsLeft = left;
+                        serverBaselineMs = android.os.SystemClock.elapsedRealtime();
+                        // startCountdown 在拿不到值时会隐藏 tv 直接返回，
+                        // 所以这里拿到值后必须把倒计时重新起一次，
+                        // 否则界面就一直空着（RPC 比 startCountdown 晚几百毫秒回来）。
+                        restartCountdownAfterServerValue();
+                    }
+                });
+            }
+        });
+    }
+
+    // 倒计时归零：请服务端判定本轮是否超时，判完立刻拉一次表。
+    // 不在本地推胜负 —— 结果一律由轮询到的 game_state 驱动，
+    // 这样自己和对手走的是同一条渲染路径，不会出现「一方显示判负、另一方还在走棋」。
+    // 戳一次可能碰上网络抖动或对手心跳刚过期，隔几秒再补几次；
+    // 服务端条件不满足时返回 false，重试也只在真正该判时才判负。
+    private void requestServerTimeoutCheck() {
+        requestServerTimeoutCheck(0);
+    }
+
+    private void requestServerTimeoutCheck(final int attempt) {
+        if (client == null || tableNo == null) return;
+        final String tId = isRoom ? null : tableNo;
+        final String rCode = isRoom ? tableNo : null;
+        async(new Runnable() {
+            @Override
+            public void run() {
+                final boolean judged = client.requestTurnTimeoutCheck(tId, rCode);
+                Log.d("TurnDebug", "requestTurnTimeoutCheck attempt=" + attempt
+                        + " judged=" + judged);
+                if (judged) {
+                    // 服务端已判负：马上拉一次，别等下一个 2 秒轮询周期。
+                    runOnUiThread(new Runnable() {
+                        @Override
+                        public void run() {
+                            pollPvpOnce();
+                        }
+                    });
+                    return;
+                }
+                if (attempt >= 3) return;
+                countdownHandler.postDelayed(new Runnable() {
+                    @Override
+                    public void run() {
+                        requestServerTimeoutCheck(attempt + 1);
+                    }
+                }, 5000);
+            }
+        });
+    }
+
+    // 服务端剩余秒数到位后补起倒计时。
+    // startCountdown 拿不到服务端值时会放弃启动（避免先闪一个 PvE 的 3:00），
+    // 这个方法在 RPC 回调里把它重新拉起来。
+    private void restartCountdownAfterServerValue() {
+        if (countdownPlayerSide == null) return;
+        final boolean wasWaiting = countdownSeconds < 0;
+        startCountdown(countdownPlayerSide, serverSecsLeftOrDefault());
+        if (wasWaiting && tvCountdownFor(countdownPlayerSide) != null) {
+            tvCountdownFor(countdownPlayerSide).setVisibility(View.VISIBLE);
+        }
+    }
+
+    private TextView tvCountdownFor(boolean side) {
+        return side ? myCountdownView() : opponentCountdownView();
+    }
+
+    // 依基线算当前剩余秒数。
+    // 还没拿到服务端值 -> -1，调用方退回本地常量兜底。
+    private int currentServerSecsLeft() {
+        final int base = serverSecsLeft;
+        if (base < 0) return -1;
+        final long elapsed = android.os.SystemClock.elapsedRealtime() - serverBaselineMs;
+        if (elapsed < 0L) return base;
+        final int left = base - (int) (elapsed / 1000L);
+        return left < 0 ? 0 : left;
+    }
+
+    // 服务端剩余秒数；还没取到就用常量兜底。
+    // 注意：兜底值只对 PvE 成立（PLAYER_TURN_SECONDS 是人机的 180 秒）。
+    // 人人/私密房拿不到服务端值时返回 -1，让调用方保持倒计时不启动，
+    // 等 refreshServerSecsLeft() 的 RPC 回来再显示 —— 否则会先闪一个
+    // 「3:00」再跳成「1:00」。
+    private int serverSecsLeftOrDefault() {
+        int left = currentServerSecsLeft();
+        if (left < 0) return serverAuthoritativeTurn() ? -1 : PLAYER_TURN_SECONDS;
+        return left;
+    }
+
+    private boolean serverAuthoritativeTurn() {
+        return isPvp || isRoom;
     }
 
     private void updateCountdownText(TextView tv) {

@@ -67,7 +67,9 @@ public class PrivateRoomActivity extends Activity {
 
         // 标题：房间号
         tvTitle = new TextView(this);
-        tvTitle.setText("私密房间 #" + roomCode);
+        // 房间号就是 4 位纯数字。加 '#' 会被读成编号/频道，用户口述房间号时
+        // 对方容易当成要输 '#'，这里只显示数字，含义交给「房间号」这三个字。
+        tvTitle.setText("房间号 " + roomCode);
         tvTitle.setTextSize(22);
         tvTitle.setTextColor(android.graphics.Color.parseColor("#FFD700"));
         tvTitle.setGravity(Gravity.CENTER);
@@ -208,7 +210,7 @@ public class PrivateRoomActivity extends Activity {
             bNick = bObj.optString("nickname", "");
         }
 
-        String label = "#" + roomCode;
+        String label = roomCode;
         if ("a".equals(mySide)) label += "·A你";
         else if ("b".equals(mySide)) label += "·B你";
         if (playing) label += "·对局中";
@@ -250,7 +252,7 @@ public class PrivateRoomActivity extends Activity {
         final boolean playing = SeatManager.isPvpPlaying(roomState);
         final boolean full = hasA && hasB;
 
-        String message = "房间 #" + roomCode + "\n";
+        String message = "房间号 " + roomCode + "\n";
         if (full) {
             message += playing ? "状态：对局中（左右已有人）" : "状态：满座，等开局";
         } else if (hasA || hasB) {
@@ -268,7 +270,7 @@ public class PrivateRoomActivity extends Activity {
         }
 
         if (full) {
-            AppDialog.confirm(this, "房间 #" + roomCode, message,
+            AppDialog.confirm(this, "房间号 " + roomCode, message,
                 "坐下当观众", null,
                 new AppDialog.OnClick() {
                     @Override
@@ -280,7 +282,7 @@ public class PrivateRoomActivity extends Activity {
             return;
         }
 
-        AppDialog.confirm(this, "房间 #" + roomCode, message,
+        AppDialog.confirm(this, "房间号 " + roomCode, message,
             "坐下玩游戏", "坐下当观众",
             new AppDialog.OnClick() {
                 @Override

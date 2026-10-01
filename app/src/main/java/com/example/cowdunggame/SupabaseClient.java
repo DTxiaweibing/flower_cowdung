@@ -649,6 +649,50 @@ public class SupabaseClient {
         return r != null && r.ok;
     }
 
+    // 倒计时归零时戳服务端一下，请它检查这局该不该判负。
+    // 客户端不做判定决策：是否判负由服务端按 deadline / current_turn_id /
+    // 对手心跳决定，条件不成立时服务端什么也不写。返回 true 仅表示
+    // 「服务端确认已判负」，false 表示还没到期或已被抢先处理。
+    //
+    // 走 rpcAnon：这个函数只读地确认到期，真正写入的是 security definer 的
+    // reap_turn_timeouts，所以不需要用户 token 也安全 —— 顺带避免 token 过期时
+    // 漏掉判负（那会让本机一直停在 0:00 等 cron 兜底）。
+    public boolean requestTurnTimeoutCheck(String tableId, String roomCode) {
+        JSONObject args = new JSONObject();
+        try {
+            if (tableId != null) args.put("p_table_id", tableId);
+            if (roomCode != null) args.put("p_room_code", roomCode);
+        } catch (Exception ignore) { }
+        RpcResult r = rpcAnon("request_turn_timeout_check", args);
+        if (r == null || !r.ok) return false;
+        try {
+            return "true".equalsIgnoreCase((r.rawText == null ? "" : r.rawText.trim()));
+        } catch (Exception e) {
+            return false;
+        }
+    }
+
+    // 回合剩余秒数：服务端按 turn_deadline_at 算好再返回。
+    // 客户端只用来显示，不参与判负 —— 判负由服务端 reap_turn_timeouts 执行。
+    // 返回 -1 表示取不到（RPC 失败 / 无行动方 / 未开局），调用方保留原值。
+    public int turnSecsLeft(String tableId, String roomCode) {
+        JSONObject args = new JSONObject();
+        try {
+            if (tableId != null) args.put("p_table_id", tableId);
+            if (roomCode != null) args.put("p_room_code", roomCode);
+        } catch (Exception ignore) { }
+        RpcResult r = rpc("turn_secs_left", args);
+        // 标量返回：PostgREST 对返回 int 的函数会回一个裸数字（如 42 / null）
+        if (r == null || !r.ok) return -1;
+        try {
+            String t = r.rawText == null ? "" : r.rawText.trim();
+            if (t.isEmpty() || "null".equals(t)) return -1;
+            return (int) Math.ceil(Double.parseDouble(t));
+        } catch (Exception e) {
+            return -1;
+        }
+    }
+
     // 排行榜 Top N（score desc, wins desc, score_reached_at asc）
     public JSONArray getRanking(int limit) {
         JSONObject args = new JSONObject();

@@ -45,6 +45,65 @@
 
 
 -- ============================================================
+-- 0. 回合截止时间（turn_deadline_at）
+--
+-- ------------------------------------------------------------
+-- 要解决的问题
+--   倒计时原本是客户端的 int 每秒自减（LocalGameActivity.startCountdown），
+--   到点由客户端自己调 reportPvpState("finished", "", 对手) 上报判负。
+--   服务端只校验「调用者是当前回合者」，不校验是否真的超时。两个方向都坏：
+--     - 改包可以在任何时刻宣布自己赢
+--     - Handler 被系统冻结 / Doez 掐掉时倒计时永远不到点，于是永不判负
+--   两条都和「60 秒不走就输」相反。
+--
+-- 做法
+--   服务端在「轮到某人」那一刻记下 turn_deadline_at = now() + 60 秒。之后：
+--     - 客户端到点调 request_turn_timeout_check 触发判负，cron 每分钟兜底（reap_turn_timeouts）
+--     - 客户端只读剩余秒数负责显示（turn_secs_left）
+--     - 客户端到点仍可上报，但服务端核对是否真超时后才接受
+--   判负只发生在服务端：客户端改不了结果，也拦不住。
+--
+-- 为什么心跳 60 秒和回合 60 秒不冲突
+--   阈值相同但管的事不同、判负方也不同：
+--     心跳失联：谁的 last_x_at 过期谁输 —— 对手可能是「正在走棋」那个人，
+--                也就是掉线/切后台/崩溃。判的是「人不在」。
+--     回合超时：只有 current_turn_id 那个人过期才输 —— 判的是「人不走」。
+--   同一时刻可能同时命中同一个人，结果都是他输；settle_round 以
+--   game_state.scored 幂等，重复调用不会重复计分。
+--
+-- 一个必须处理的冲突
+--   reap_stale_seats 的既有语义：两个座位都失联 -> 整桌清空、不开胜负
+--   （没人能证明对手还在，谁也不该赢）。
+--   reap_turn_timeouts 若不看对手心跳就判负，会在「双方都掉线且正轮到
+--   其中一人」时凭空判一个人赢，把上面那条语义顶掉。
+--   所以下面判负前强制要求：对手 last_x_at 在 60 秒内；不满足就跳过，
+--   留给 reap_stale_seats 处理。
+--
+-- 秒数：人人桌 / 私密房间 60 秒，与心跳阈值一致，只在 pvp_turn_seconds 改一处。
+--   人机桌不纳入：电脑走子完全在客户端（ComputerAI），服务端既不知道轮到谁
+--   也不知道电脑会不会动，没有可判负的对象。人机倒计时继续走客户端本地 180 秒。
+--
+-- 放独立列而不是塞进 game_state jsonb：pvp_report_state / room_report_state
+-- 是整包覆盖 game_state（客户端传的 jsonb 原样存），塞进 jsonb 会被下一次
+-- 上报冲掉。
+--
+-- 这一段必须排在第 1 节之前：purge_table_on_empty 是触发器，里面要写
+-- new.turn_deadline_at，列得先存在。
+-- ============================================================
+
+alter table public.pvp_tables
+  add column if not exists turn_deadline_at timestamptz;
+
+alter table public.private_rooms
+  add column if not exists turn_deadline_at timestamptz;
+
+create or replace function public.pvp_turn_seconds()
+returns int
+language sql immutable
+as $$ select 60 $$;
+
+
+-- ============================================================
 -- 1. 清场触发器：拆成两层
 --    一层「有人走但还有人留」：只清聊天，观众与结算凭据都留着
 --    一层「整桌归零」：全清 + 踢观众
@@ -116,6 +175,7 @@ begin
     delete from public.pve_watchers where table_id = new.id;
   else
     new.current_turn_id := null;          -- pve_tables 无此列
+    new.turn_deadline_at := null;         -- 同上：没有行动方就没有回合可超时
     if TG_ARGV[0] = 'pvp' then
       delete from public.pvp_watchers where table_id = new.id;
     else
@@ -126,6 +186,23 @@ begin
   return new;
 end;
 $$;
+
+-- 触发器本体也在这里补建，不依赖 fix_chat_lifecycle.sql 先跑过。
+-- 少了它，座位虽然被回收器放掉了，但聊天记录留着、观战人数不回正 ——
+-- 表现就是「桌子空了但还有一堆观众和上一局聊天」。
+-- create or replace function 已经保住了旧绑定，这里 drop + create 是为了
+-- 幂等：重复执行不会报「触发器已存在」。
+drop trigger if exists pvp_purge_on_empty on public.pvp_tables;
+create trigger pvp_purge_on_empty
+  before update on public.pvp_tables
+  for each row
+  execute procedure public.purge_table_on_empty('pvp');
+
+drop trigger if exists room_purge_on_empty on public.private_rooms;
+create trigger room_purge_on_empty
+  before update on public.private_rooms
+  for each row
+  execute procedure public.purge_table_on_empty('room');
 
 
 -- ============================================================
@@ -178,12 +255,13 @@ begin
           'moves', '[]'::jsonb,
           'turn', '',
           'winner', winner_side,
-          'status', 'finished',
-          'forfeit', true
-        ),
-        current_turn_id = null,
-        status = 'seated',
-        last_active_at = now()
+             'status', 'finished',
+             'forfeit', true
+           ),
+         current_turn_id = null,
+         turn_deadline_at = null,
+         status = 'seated',
+         last_active_at = now()
     where id = tid;
 
     -- 服务端立即结算，不依赖剩下那位还在轮询。
@@ -209,6 +287,7 @@ begin
                      else game_state
                    end,
       current_turn_id = case when current_turn_id = uid then null else current_turn_id end,
+      turn_deadline_at = case when current_turn_id = uid then null else turn_deadline_at end,
       last_active_at = now()
   where id = tid and (player_a_id = uid or player_b_id = uid);
 
@@ -263,12 +342,13 @@ begin
           'moves', '[]'::jsonb,
           'turn', '',
           'winner', winner_side,
-          'status', 'finished',
-          'forfeit', true
-        ),
-        current_turn_id = null,
-        status = 'seated',
-        last_active_at = now()
+             'status', 'finished',
+             'forfeit', true
+           ),
+         current_turn_id = null,
+         turn_deadline_at = null,
+         status = 'seated',
+         last_active_at = now()
     where room_code = code;
 
     perform public.finish_game(null, code, 'private', winner_uid, uid, null);
@@ -290,6 +370,7 @@ begin
                      else game_state
                    end,
       current_turn_id = case when current_turn_id = uid then null else current_turn_id end,
+      turn_deadline_at = case when current_turn_id = uid then null else turn_deadline_at end,
       last_active_at = now()
   where room_code = code and (player_a_id = uid or player_b_id = uid);
 
@@ -353,10 +434,17 @@ begin
       game_state = case
                      when coalesce(game_state->>'status', '') = 'finished'
                      then jsonb_build_object(
-                            'turn', '', 'status', 'open', 'winner', '',
-                            'flowers', '[]'::jsonb, 'moves', '[]'::jsonb)
+                           'turn', '', 'status', 'open', 'winner', '',
+                           'flowers', '[]'::jsonb, 'moves', '[]'::jsonb)
                      else game_state
                    end,
+      -- 上一局已结束就顺手清掉可能残留的截止时间（正常路径上它已被判负逻辑
+      -- 置空，这里是「认输与超时判负同时到达」这类边界下的幂等保险）
+      turn_deadline_at = case
+                          when coalesce(game_state->>'status', '') = 'finished'
+                          then null
+                          else turn_deadline_at
+                        end,
       last_active_at = now()
   where id = tid;
 
@@ -407,10 +495,15 @@ begin
       game_state = case
                      when coalesce(game_state->>'status', '') = 'finished'
                      then jsonb_build_object(
-                            'turn', '', 'status', 'open', 'winner', '',
-                            'flowers', '[]'::jsonb, 'moves', '[]'::jsonb)
+                           'turn', '', 'status', 'open', 'winner', '',
+                           'flowers', '[]'::jsonb, 'moves', '[]'::jsonb)
                      else game_state
                    end,
+      turn_deadline_at = case
+                          when coalesce(game_state->>'status', '') = 'finished'
+                          then null
+                          else turn_deadline_at
+                        end,
       last_active_at = now()
   where id = tid;
 
@@ -471,10 +564,15 @@ begin
         game_state = case
                        when coalesce(game_state->>'status', '') = 'finished'
                        then jsonb_build_object(
-                              'turn', '', 'status', 'open', 'winner', '',
-                              'flowers', '[]'::jsonb, 'moves', '[]'::jsonb)
+                             'turn', '', 'status', 'open', 'winner', '',
+                             'flowers', '[]'::jsonb, 'moves', '[]'::jsonb)
                        else game_state
                      end,
+        turn_deadline_at = case
+                            when coalesce(game_state->>'status', '') = 'finished'
+                            then null
+                            else turn_deadline_at
+                          end,
         last_active_at = now()
     where room_code = code;
     my_side := 'a';
@@ -486,10 +584,15 @@ begin
         game_state = case
                        when coalesce(game_state->>'status', '') = 'finished'
                        then jsonb_build_object(
-                              'turn', '', 'status', 'open', 'winner', '',
-                              'flowers', '[]'::jsonb, 'moves', '[]'::jsonb)
+                             'turn', '', 'status', 'open', 'winner', '',
+                             'flowers', '[]'::jsonb, 'moves', '[]'::jsonb)
                        else game_state
                      end,
+        turn_deadline_at = case
+                            when coalesce(game_state->>'status', '') = 'finished'
+                            then null
+                            else turn_deadline_at
+                          end,
         last_active_at = now()
     where room_code = code;
     my_side := 'b';
@@ -785,6 +888,7 @@ begin
           last_a_at = null, last_b_at = null,
           ready_a = false, ready_b = false,
           current_turn_id = null,
+          turn_deadline_at = null,
           game_state = '{}'::jsonb,
           status = 'open', last_active_at = now()
       where id = r.id;
@@ -805,6 +909,7 @@ begin
               'moves', '[]'::jsonb, 'turn', '', 'winner', v_win_side,
               'status', 'finished', 'forfeit', true),
             current_turn_id = null,
+            turn_deadline_at = null,
             status = 'seated',
             last_active_at = now()
         where id = r.id;
@@ -820,6 +925,10 @@ begin
           last_b_at   = case when v_dead_side = 'b' then null else last_b_at end,
           ready_a = case when v_dead_side = 'a' then false else ready_a end,
           ready_b = case when v_dead_side = 'b' then false else ready_b end,
+          -- 没有行动方就没有回合可超时。这一句和上面判负那句重复不冲突：
+          -- 上面管 playing 分支，这里管 seated 分支（本来就没在走棋，
+          -- 但可能残留着上一局的 deadline，reap_turn_timeouts 会拿它误判）。
+          turn_deadline_at = null,
           status = 'seated',
           last_active_at = now()
       where id = r.id;
@@ -846,7 +955,7 @@ begin
       set player_a_id = null, player_b_id = null,
           last_a_at = null, last_b_at = null,
           ready_a = false, ready_b = false,
-          current_turn_id = null,
+          current_turn_id = null, turn_deadline_at = null,
           game_state = '{}'::jsonb,
           status = 'open', last_active_at = now()
       where room_code = r.room_code;
@@ -866,6 +975,7 @@ begin
               'moves', '[]'::jsonb, 'turn', '', 'winner', v_win_side,
               'status', 'finished', 'forfeit', true),
             current_turn_id = null,
+            turn_deadline_at = null,
             status = 'seated',
             last_active_at = now()
         where room_code = r.room_code;
@@ -880,10 +990,79 @@ begin
           last_b_at   = case when v_dead_side = 'b' then null else last_b_at end,
           ready_a = case when v_dead_side = 'a' then false else ready_a end,
           ready_b = case when v_dead_side = 'b' then false else ready_b end,
+          turn_deadline_at = null,
           status = 'seated',
           last_active_at = now()
       where room_code = r.room_code;
     end if;
+  end loop;
+
+  -- ---------- 单边占座：一个人走了/崩了，另一个人还赖在座位上 ----------
+  -- 上面两个循环都要求「两个座位都有人」，所以这种表一个都扫不到。
+  -- 这正是「有人退不出桌子、桌上一直挂着上一局 finished」的来源：
+  -- 对手走了以后 pvp_leave 把 status 留在 seated，
+  -- 而回收器因为少了一个人而永远不碰它。
+  --
+  -- 只在「唯一占座者自己也停了心跳」时才动，所以活人不会被误清：
+  -- 他在 App 里就一直在发心跳，last_*_at 永远是新的。
+  -- 被冻/被杀/弱网断了才会落到这里。
+  --
+  -- 对手已经不在，没有胜负可判，也不计分 —— 单纯把座位放掉。
+  -- game_state 一起清空：残留的上一局 finished/winner 会让下一个进来
+  -- 的人先看到上一局的结果。
+  for r in
+    select t.id, t.player_a_id, t.player_b_id,
+           case when t.player_a_id is not null then 'a' else 'b' end as side,
+           case when t.player_a_id is not null then t.last_a_at else t.last_b_at end as last_seen
+      from public.pvp_tables t
+     where t.status in ('playing', 'seated')
+       and ( (t.player_a_id is not null)::int + (t.player_b_id is not null)::int ) = 1
+       and case when t.player_a_id is not null then t.last_a_at else t.last_b_at end
+             is not null
+       and case when t.player_a_id is not null then t.last_a_at else t.last_b_at end
+             < now() - v_dead_line
+  loop
+    update public.pvp_tables
+    set player_a_id = case when r.side = 'a' then null else player_a_id end,
+        player_b_id = case when r.side = 'b' then null else player_b_id end,
+        last_a_at   = case when r.side = 'a' then null else last_a_at end,
+        last_b_at   = case when r.side = 'b' then null else last_b_at end,
+        ready_a = case when r.side = 'a' then false else ready_a end,
+        ready_b = case when r.side = 'b' then false else ready_b end,
+        current_turn_id = null,
+        turn_deadline_at = null,
+        game_state = '{}'::jsonb,
+        status = 'open',
+        last_active_at = now()
+    where id = r.id;
+  end loop;
+
+  -- 私密房同一口径
+  for r in
+    select t.room_code,
+           case when t.player_a_id is not null then 'a' else 'b' end as side,
+           case when t.player_a_id is not null then t.last_a_at else t.last_b_at end as last_seen
+      from public.private_rooms t
+     where t.status in ('playing', 'seated')
+       and ( (t.player_a_id is not null)::int + (t.player_b_id is not null)::int ) = 1
+       and case when t.player_a_id is not null then t.last_a_at else t.last_b_at end
+             is not null
+       and case when t.player_a_id is not null then t.last_a_at else t.last_b_at end
+             < now() - v_dead_line
+  loop
+    update public.private_rooms
+    set player_a_id = case when r.side = 'a' then null else player_a_id end,
+        player_b_id = case when r.side = 'b' then null else player_b_id end,
+        last_a_at   = case when r.side = 'a' then null else last_a_at end,
+        last_b_at   = case when r.side = 'b' then null else last_b_at end,
+        ready_a = case when r.side = 'a' then false else ready_a end,
+        ready_b = case when r.side = 'b' then false else ready_b end,
+        current_turn_id = null,
+        turn_deadline_at = null,
+        game_state = '{}'::jsonb,
+        status = 'open',
+        last_active_at = now()
+    where room_code = r.room_code;
   end loop;
 end;
 $$;
@@ -915,8 +1094,472 @@ begin
   end loop;
 end $$;
 
-select cron.schedule('reap-stale-seats', '* * * * *',
-  $$ select public.reap_stale_seats(); $$);
+-- 座位回收器必须真的建出来。和 reap-turn-timeouts 同样的理由：
+-- unschedule 成功但 schedule 失败（权限、pg_cron 被禁用）会让回收彻底停摆，
+-- 而回收一停，掉线的座位就会永远挂着 —— 那正是这次要修的问题。
+-- 所以这里当场确认，没建出来就报错，不让脚本「看着成功」地过去。
+do $$
+declare
+  v_new_job integer;
+  v_found   integer;
+begin
+  perform cron.schedule('reap-stale-seats', '* * * * *',
+    $cron$ select public.reap_stale_seats(); $cron$);
+  v_new_job := lastval();
+
+  select count(*) into v_found
+    from cron.job
+   where jobid = v_new_job
+     and jobname = 'reap-stale-seats'
+     and active;
+
+  if v_found = 0 then
+    raise exception 'reap-stale-seats 排程失败：旧任务已删除且新任务未建出，座位回收将不会执行';
+  end if;
+
+  raise notice 'reap-stale-seats 已排定，jobid=%', v_new_job;
+end $$;
+
+
+-- ============================================================
+-- 6.7 回合超时判负
+--
+--     与 reap_stale_seats 的分工：
+--       reap_stale_seats（每分钟）：判「人不在」—— 掉线、崩溃、切后台
+--       reap_turn_timeouts（每分钟兜底）：判「人不走」—— 人在线但不动棋
+--     判负本身由客户端到点调 public.request_turn_timeout_check() 触发
+--     （秒级），本 cron 只是没人戳时的兜底，最多多等一分钟。
+--
+--     判负前强制要求对手心跳在 60 秒内：否则说明对手也失联了，此时该走
+--     reap_stale_seats「双方都失联 -> 整桌清空、不开胜负」的语义，而不是
+--     凭空判一个人赢。
+--
+--     放在 settle_round 之后：本函数要调用它。
+-- ============================================================
+
+create or replace function public.reap_turn_timeouts()
+returns void
+language plpgsql security definer set search_path = public
+as $$
+declare
+  r          record;
+  v_dead_side text;
+  v_dead_uid uuid;
+  v_win_side text;
+  v_win_uid  uuid;
+begin
+  -- ---------- 人人桌 ----------
+  for r in
+    select t.id, t.player_a_id, t.player_b_id, t.current_turn_id,
+           case when t.current_turn_id = t.player_a_id then 'a' else 'b' end as turn_side
+      from public.pvp_tables t
+     where t.status = 'playing'
+       and t.current_turn_id is not null
+       and t.turn_deadline_at is not null
+       and t.turn_deadline_at < now()
+       -- 对手心跳必须在 60 秒内，否则交给 reap_stale_seats 整桌清空
+       and case when t.current_turn_id = t.player_a_id
+                then t.last_b_at >= now() - interval '60 seconds'
+                else t.last_a_at >= now() - interval '60 seconds' end
+  loop
+    if r.turn_side = 'a' then
+      v_dead_side := 'a'; v_dead_uid := r.player_a_id;
+      v_win_side  := 'b'; v_win_uid  := r.player_b_id;
+    else
+      v_dead_side := 'b'; v_dead_uid := r.player_b_id;
+      v_win_side  := 'a'; v_win_uid  := r.player_a_id;
+    end if;
+
+    -- status / current_turn_id / turn_deadline_at 都放进 WHERE：
+    -- 客户端可能刚好在这期间落了子换了手，重评估后条件不成立 -> 空操作。
+    -- 只判「本轮开始时轮到的那个人的 deadline 已过」，不判行数变化。
+    update public.pvp_tables
+    set game_state = coalesce(game_state, '{}'::jsonb) || jsonb_build_object(
+          'moves', '[]'::jsonb, 'turn', '', 'winner', v_win_side,
+          'status', 'finished', 'forfeit', true, 'timeout', true),
+        current_turn_id = null,
+        turn_deadline_at = null,
+        status = 'seated',
+        ready_a = false, ready_b = false,
+        last_active_at = now()
+    where id = r.id
+      and status = 'playing'
+      and current_turn_id = r.current_turn_id
+      and turn_deadline_at is not null
+      and turn_deadline_at < now();
+
+    if found then
+      perform public.settle_round(r.id, null, 'lobby', v_win_uid, v_dead_uid, null);
+    end if;
+  end loop;
+
+  -- ---------- 私密房间（口径相同，积分为 +10/-2） ----------
+  for r in
+    select t.room_code, t.player_a_id, t.player_b_id, t.current_turn_id,
+           case when t.current_turn_id = t.player_a_id then 'a' else 'b' end as turn_side
+      from public.private_rooms t
+     where t.status = 'playing'
+       and t.current_turn_id is not null
+       and t.turn_deadline_at is not null
+       and t.turn_deadline_at < now()
+       and case when t.current_turn_id = t.player_a_id
+                then t.last_b_at >= now() - interval '60 seconds'
+                else t.last_a_at >= now() - interval '60 seconds' end
+  loop
+    if r.turn_side = 'a' then
+      v_dead_side := 'a'; v_dead_uid := r.player_a_id;
+      v_win_side  := 'b'; v_win_uid  := r.player_b_id;
+    else
+      v_dead_side := 'b'; v_dead_uid := r.player_b_id;
+      v_win_side  := 'a'; v_win_uid  := r.player_a_id;
+    end if;
+
+    update public.private_rooms
+    set game_state = coalesce(game_state, '{}'::jsonb) || jsonb_build_object(
+          'moves', '[]'::jsonb, 'turn', '', 'winner', v_win_side,
+          'status', 'finished', 'forfeit', true, 'timeout', true),
+        current_turn_id = null,
+        turn_deadline_at = null,
+        status = 'seated',
+        ready_a = false, ready_b = false,
+        last_active_at = now()
+    where room_code = r.room_code
+      and status = 'playing'
+      and current_turn_id = r.current_turn_id
+      and turn_deadline_at is not null
+      and turn_deadline_at < now();
+
+    if found then
+      perform public.settle_round(null, r.room_code, 'private', v_win_uid, v_dead_uid, null);
+    end if;
+  end loop;
+end;
+$$;
+
+-- 回收器由 cron 以超级用户身份跑，客户端不需要也不该直接调。
+-- 整段包 exception：权限回收属于加固步骤，万一语法/角色有问题只报 warning，
+-- 绝不能把整份迁移回滚（沿用 6.2 里对 settle_round 的处理方式）。
+do $$
+begin
+  if to_regprocedure('public.reap_turn_timeouts()') is null then
+    raise warning 'reap_turn_timeouts 签名与预期不符，跳过权限回收';
+    return;
+  end if;
+
+  begin
+    execute 'revoke all on function public.reap_turn_timeouts() from anon, authenticated';
+  exception when others then
+    raise warning 'reap_turn_timeouts 回收 anon/authenticated 失败: %', sqlerrm;
+  end;
+
+  begin
+    execute 'revoke all on function public.reap_turn_timeouts() from PUBLIC';
+  exception when others then
+    raise warning 'reap_turn_timeouts 回收 PUBLIC 失败: %', sqlerrm;
+  end;
+end $$;
+
+-- ============================================================
+-- 6b. 客户端到点请求判负（秒级主路径）
+--
+-- 为什么需要：reap_turn_timeouts 原本想靠 cron 每 10 秒跑一遍，但本实例的
+-- pg_cron 不支持秒位（见下方排程段注释），60 秒的回合超时不能等 10 分钟。
+--
+-- 为什么安全：这个函数不做任何判定决策，只是「请服务端看一眼这局该不该判」。
+-- 真正判负的 WHERE 条件全在服务端（deadline 已过 + current_turn 未变 +
+-- 对手心跳在 60 秒内），和 reap_turn_timeouts 用的是同一套条件。
+-- 客户端传什么 id 都改变不了结果：
+--   - 局面没过期        -> 不判
+--   - 回合已经换过      -> 不判（对手刚好在这期间落了子）
+--   - 对手也掉线了      -> 不判，交给 reap_stale_seats 整桌清空
+-- 所以对手无法靠调它来抢判或作弊：它只能让服务端去检查一个本来就该判的局面。
+--
+-- 之所以允许 anon：这是「让服务端检查该不该判」的入口，不含任何特权写入，
+-- 写入路径仍走 security definer 的 settle_round。
+-- ============================================================
+create or replace function public.request_turn_timeout_check(
+  p_table_id text default null,
+  p_room_code char(4) default null
+)
+returns boolean
+language plpgsql security definer set search_path = public
+as $$
+declare
+  v_due boolean;
+begin
+  if p_table_id is null and p_room_code is null then
+    return false;
+  end if;
+
+  -- 先只读地确认「这局确实到期且该判」，拿不到就不写。
+  -- 与 reap_turn_timeouts 的筛选条件保持一致，避免两条路径口径不同。
+  if p_table_id is not null then
+    select exists (
+      select 1 from public.pvp_tables t
+       where t.id = p_table_id
+         and t.status = 'playing'
+         and t.current_turn_id is not null
+         and t.turn_deadline_at is not null
+         and t.turn_deadline_at < now()
+         and case when t.current_turn_id = t.player_a_id
+                  then t.last_b_at >= now() - interval '60 seconds'
+                  else t.last_a_at >= now() - interval '60 seconds' end
+    ) into v_due;
+  else
+    select exists (
+      select 1 from public.private_rooms t
+       where t.room_code = p_room_code
+         and t.status = 'playing'
+         and t.current_turn_id is not null
+         and t.turn_deadline_at is not null
+         and t.turn_deadline_at < now()
+         and case when t.current_turn_id = t.player_a_id
+                  then t.last_b_at >= now() - interval '60 seconds'
+                  else t.last_a_at >= now() - interval '60 seconds' end
+    ) into v_due;
+  end if;
+
+  if not coalesce(v_due, false) then
+    return false;
+  end if;
+
+  -- 条件成立，交给唯一的判负实现去写（它内部还会按 current_turn_id 重新
+  -- 校验一次，所以这里不存在 TOCTOU：并发换手时那次 update 会落空）。
+  perform public.reap_turn_timeouts();
+  return true;
+end;
+$$;
+
+do $$
+begin
+  if to_regprocedure('public.request_turn_timeout_check(text,character)') is null then
+    raise warning 'request_turn_timeout_check 签名与预期不符，跳过授权';
+    return;
+  end if;
+
+  begin
+    execute 'grant execute on function public.request_turn_timeout_check(text, character) to authenticated, anon';
+  exception when others then
+    raise warning 'request_turn_timeout_check 授权失败: %', sqlerrm;
+  end;
+end $$;
+
+
+-- 排掉同名旧任务再排新的：cron.schedule 用固定名字，重复执行会再建一个同名
+-- 任务（pg_cron 允许重名，会显示成 reap-turn-timeouts (1)），那就跑两遍。
+--
+-- unschedule 成功但 schedule 失败（权限、pg_cron 被禁用）会让这个任务彻底消失，
+-- 而回超时已经把旧任务删掉了 —— 服务端就再也不会判超时，而且不会报错。
+-- 所以排完必须当场确认真的建出来了，没有就明确报错。
+do $$
+declare
+  j         record;
+  v_new_job integer;
+  v_found   integer;
+begin
+  for j in
+    select jobid from cron.job where jobname = 'reap-turn-timeouts'
+  loop
+    perform cron.unschedule(j.jobid);
+  end loop;
+
+  -- 每分钟兜底，不是主判负路径。
+  --
+  -- 这里原本排的是六段式 '*/10 * * * * *'（想做到每 10 秒），但实测本实例的
+  -- pg_cron 只按五段解析：秒位被当成分钟位，六段式退化成「每 10 分钟的第 0 秒」。
+  -- 探针证据：cron.schedule('sec-probe','* * * * * *','select 1') 静置 15 秒后
+  -- cron.job_run_details 只有 1 条（若支持秒位应为 ~15 条）。
+  -- 60 秒的回合超时等不了 10 分钟，所以秒级判负改由客户端到点调
+  -- public.request_turn_timeout_check() 触发（见该函数注释）。
+  -- 本任务只负责兜底：客户端被冻结、切后台、进程被杀时没人戳，
+  -- 由它每分钟扫一次，最多让结果晚一分钟出现。
+  --
+  -- 内层定界符要用和外层 do 块不同的名字（如 $cron$）：同名会把外层块
+  -- 提前截断，报 42601 语法错误。注释里也不能出现定界符本身。
+  perform cron.schedule('reap-turn-timeouts', '* * * * *',
+    $cron$ select public.reap_turn_timeouts(); $cron$);
+  v_new_job := lastval();
+
+  select count(*) into v_found
+    from cron.job
+   where jobid = v_new_job
+     and jobname = 'reap-turn-timeouts'
+     and active;
+
+  if v_found = 0 then
+    raise exception 'reap-turn-timeouts 排程失败：旧任务已删除且新任务未建出，回超时判负将不会执行';
+  end if;
+
+  raise notice 'reap-turn-timeouts 已排定，jobid=%', v_new_job;
+end $$;
+
+
+-- ============================================================
+-- 6.8 开局写第一手的截止时间
+--
+--     pvp_ready / room_ready 原本定义在 pvp_tables.sql / private_rooms.sql，
+--     不在本文件里。直接改那两个基础文件的风险是：它们是全量建库脚本，
+--     顺序依赖多（触发器、watcher 计数都在前面），单独重跑未必安全。
+--     所以在这里重新定义，只加 turn_deadline_at 一行，其余逐字照抄。
+--
+--     房间那份以 private_rooms.sql 的当前版本为准（含「开局即清 ready、
+--     下一局需重新准备」那条注释对应的 case 判断）。
+-- ============================================================
+
+create or replace function public.pvp_ready(tid text)
+returns boolean
+language plpgsql security definer set search_path = public
+as $$
+declare
+  uid  uuid := auth.uid();
+  a_id uuid;
+  b_id uuid;
+  c_status text;
+  new_round int;
+  first_is_a boolean;
+begin
+  if uid is null then
+    raise exception 'NOT_AUTHENTICATED';
+  end if;
+
+  update public.pvp_tables
+  set ready_a = case when player_a_id = uid then true else ready_a end,
+      ready_b = case when player_b_id = uid then true else ready_b end,
+      last_active_at = now()
+  where id = tid and (player_a_id = uid or player_b_id = uid);
+
+  if not found then
+    raise exception 'NOT_YOUR_TABLE';
+  end if;
+
+  select player_a_id, player_b_id, status, round_no
+       into a_id, b_id, c_status, new_round
+  from public.pvp_tables where id = tid;
+
+  -- 双方就绪且不在对局中才允许开局：
+  --   防止对局中重复开局重置棋盘；开局即清 ready，下一局需重新准备
+  if a_id is not null and b_id is not null
+     and coalesce(c_status, 'open') <> 'playing'
+     and exists (select 1 from public.pvp_tables
+                 where id = tid and ready_a and ready_b) then
+    new_round := new_round + 1;
+    first_is_a := (new_round % 2) = 1;
+
+    update public.pvp_tables
+    set status = 'playing',
+        round_no = new_round,
+        current_turn_id = case when first_is_a then a_id else b_id end,
+        -- 「轮到 first_is_a」的那一刻起算本轮 60 秒
+        turn_deadline_at = now() + make_interval(secs => public.pvp_turn_seconds()),
+        game_state = jsonb_build_object(
+          'turn', case when first_is_a then 'a' else 'b' end,
+          'status', 'ongoing',
+          'flowers', '[1,2,3,4,5,6]'::jsonb,
+          'moves', '[]'::jsonb),
+        ready_a = false,
+        ready_b = false,
+        last_active_at = now()
+    where id = tid;
+  end if;
+
+  return true;
+end;
+$$;
+
+create or replace function public.room_ready(code char(4))
+returns boolean
+language plpgsql security definer set search_path = public
+as $$
+declare
+  uid  uuid := auth.uid();
+  a_id uuid;
+  b_id uuid;
+  c_status text;
+  new_round int;
+  first_is_a boolean;
+begin
+  if uid is null then
+    raise exception 'NOT_AUTHENTICATED';
+  end if;
+
+  update public.private_rooms
+  set ready_a = case when player_a_id = uid then true else ready_a end,
+      ready_b = case when player_b_id = uid then true else ready_b end,
+      last_active_at = now()
+  where room_code = code and (player_a_id = uid or player_b_id = uid);
+
+  if not found then
+    raise exception 'NOT_YOUR_ROOM';
+  end if;
+
+  select player_a_id, player_b_id, status, round_no
+       into a_id, b_id, c_status, new_round
+  from public.private_rooms where room_code = code;
+
+  -- 双方就绪且不在对局中才允许开局
+  if a_id is not null and b_id is not null
+     and coalesce(c_status, 'open') <> 'playing'
+     and exists (select 1 from public.private_rooms
+                 where room_code = code and ready_a and ready_b) then
+    new_round := new_round + 1;
+    first_is_a := (new_round % 2) = 1;
+
+    update public.private_rooms
+    set status = 'playing',
+        round_no = new_round,
+        current_turn_id = case when first_is_a then a_id else b_id end,
+        turn_deadline_at = now() + make_interval(secs => public.pvp_turn_seconds()),
+        game_state = jsonb_build_object(
+          'turn', case when first_is_a then 'a' else 'b' end,
+          'status', 'ongoing',
+          'flowers', '[1,2,3,4,5,6]'::jsonb,
+          'moves', '[]'::jsonb),
+        ready_a = false,
+        ready_b = false,
+        last_active_at = now()
+    where room_code = code;
+  end if;
+
+  return true;
+end;
+$$;
+
+
+-- ============================================================
+-- 6.9 客户端读剩余秒数
+--
+--     单独一个函数而不是让客户端直读 turn_deadline_at 再自己减：直读拿到的是
+--     绝对时间戳，客户端一减就又依赖设备时钟（可被改、也会被 Handler 冻结）。
+--     返回服务端算好的秒数，客户端只负责显示。
+--     返回 null = 没有行动方 / 不在倒计时（未开局、已结束、人机桌）。
+-- ============================================================
+
+create or replace function public.turn_secs_left(
+  p_table_id text default null,
+  p_room_code char(4) default null
+)
+returns int
+language plpgsql stable security definer set search_path = public
+as $$
+declare
+  v_deadline timestamptz;
+  v_turn uuid;
+begin
+  if p_table_id is not null then
+    select turn_deadline_at, current_turn_id into v_deadline, v_turn
+      from public.pvp_tables where id = p_table_id;
+  else
+    select turn_deadline_at, current_turn_id into v_deadline, v_turn
+      from public.private_rooms where room_code = p_room_code;
+  end if;
+
+  if v_turn is null or v_deadline is null then
+    return null;
+  end if;
+
+  return greatest(0, ceil(extract(epoch from (v_deadline - now()))));
+end;
+$$;
 
 
 -- ============================================================
@@ -955,6 +1598,7 @@ declare
   b_id     uuid;
   c_turn   uuid;
   c_status text;
+  c_deadline timestamptz;
   my_side  text;
   new_turn text;
   st_status text;
@@ -963,8 +1607,8 @@ begin
     raise exception 'NOT_AUTHENTICATED';
   end if;
 
-  select player_a_id, player_b_id, current_turn_id, status
-       into a_id, b_id, c_turn, c_status
+  select player_a_id, player_b_id, current_turn_id, status, turn_deadline_at
+       into a_id, b_id, c_turn, c_status, c_deadline
   from public.pvp_tables where id = tid;
   if a_id is null then
     raise exception 'TABLE_NOT_FOUND';
@@ -980,16 +1624,27 @@ begin
     if my_side is null then
       raise exception 'NOT_YOUR_TABLE';
     end if;
-    if c_turn is not null and c_turn = uid then
-      null;
-    elsif state->>'status' = 'finished' then
-      if c_turn = uid then
-        null;
-      else
-        raise exception 'NOT_YOUR_TURN';
-      end if;
-    else
+    if c_turn is null or c_turn <> uid then
       raise exception 'NOT_YOUR_TURN';
+    end if;
+
+    -- finished 分两种，靠 winner 是不是「我」区分：
+    --   winner = 我   -> 正常胜负（对手已无花可拿），按原样放行
+    --   winner = 对手 -> 判负声明。客户端的超时倒计时就是走这条
+    --     （LocalGameActivity:2015），而这条以前只校验「我是当前回合者」，
+    --     改包就能在任何时刻宣布自己赢。现在必须确认 deadline 真的过了，
+    --     判负权收归服务端：cron（reap_turn_timeouts）才是超时判负的执行者，
+    --     这里只是让客户端到点时那一次上报能立刻生效，玩家不用干等一分钟。
+    --
+    -- 【已知信任边界，未在本次修复】正常胜负那条仍然信客户端上报的棋盘：
+    -- checkGameEnd() 只是本地把 remainingFlowers[1..5] 加总看是否为 0，
+    -- 服务端不校验 moves，所以伪造 flowers 数组仍可提前宣布获胜。
+    -- 要根治得让服务端重放并校验每一步（换手权、拿花数、胜负条件），
+    -- 那是另一件事，不属于「60 秒回合倒计时以服务端为准」的范围。
+    if state->>'status' = 'finished' and state->>'winner' <> my_side then
+      if c_deadline is null or c_deadline > now() then
+        raise exception 'NOT_EXPIRED';
+      end if;
     end if;
   end if;
 
@@ -1006,15 +1661,30 @@ begin
         when new_turn = 'b' then b_id
         else null
       end,
+      -- 换手就把本轮 60 秒给新行动方；结束清空。deadline 存在独立列而不是
+      -- game_state 里，正是因为上面那句 game_state = state 是整包覆盖。
+      turn_deadline_at = case
+        when st_status = 'finished' then null
+        when new_turn in ('a', 'b')
+          then now() + make_interval(secs => public.pvp_turn_seconds())
+        else null
+      end,
       status = case when st_status = 'finished' then 'seated' else 'playing' end,
       ready_a = case when st_status = 'finished' then false else ready_a end,
       ready_b = case when st_status = 'finished' then false else ready_b end,
       last_active_at = now()
   where id = tid
-    and (player_a_id = uid or player_b_id = uid);
+    and (player_a_id = uid or player_b_id = uid)
+    -- 已结算过就不再覆盖。
+    -- 回合超时时 reap_turn_timeouts 先判负并结算（scored=true），而超时者
+    -- 手上可能正好有一手在路上的上报这时才到：c_status 已是 'seated'，
+    -- 上面那段轮次校验整块被跳过，若不加这一条，game_state = state 会把
+    -- finished 和 scored 一起抹掉，对局复活成 playing，且 scored 丢失可能导致
+    -- 重复计分。这和上面「离席后晚到的上报」是同一类写回竞态。
+    and (game_state->>'scored') is distinct from 'true';
 
   if not found then
-    -- 已经离席（或被踢），这次上报直接忽略，不当作错误
+    -- 已经离席（或被踢）、或本局已结算，这次上报直接忽略，不当作错误
     return true;
   end if;
 
@@ -1033,6 +1703,7 @@ declare
   b_id     uuid;
   c_turn   uuid;
   c_status text;
+  c_deadline timestamptz;
   my_side  text;
   new_turn text;
   st_status text;
@@ -1041,8 +1712,8 @@ begin
     raise exception 'NOT_AUTHENTICATED';
   end if;
 
-  select player_a_id, player_b_id, current_turn_id, status
-       into a_id, b_id, c_turn, c_status
+  select player_a_id, player_b_id, current_turn_id, status, turn_deadline_at
+       into a_id, b_id, c_turn, c_status, c_deadline
   from public.private_rooms where room_code = code;
   if a_id is null then
     raise exception 'ROOM_NOT_FOUND';
@@ -1052,22 +1723,19 @@ begin
     raise exception 'NOT_YOUR_ROOM';
   end if;
 
-  -- 对局中才轮次校验
+  -- 对局中才轮次校验。判负声明必须核对 deadline，理由同 pvp_report_state。
   if c_status = 'playing' then
     my_side := case when a_id = uid then 'a' when b_id = uid then 'b' else null end;
     if my_side is null then
       raise exception 'NOT_YOUR_ROOM';
     end if;
-    if c_turn is not null and c_turn = uid then
-      null;
-    elsif state->>'status' = 'finished' then
-      if c_turn = uid then
-        null;
-      else
-        raise exception 'NOT_YOUR_TURN';
-      end if;
-    else
+    if c_turn is null or c_turn <> uid then
       raise exception 'NOT_YOUR_TURN';
+    end if;
+    if state->>'status' = 'finished' and state->>'winner' <> my_side then
+      if c_deadline is null or c_deadline > now() then
+        raise exception 'NOT_EXPIRED';
+      end if;
     end if;
   end if;
 
@@ -1082,14 +1750,25 @@ begin
         when new_turn = 'b' then b_id
         else null
       end,
+      turn_deadline_at = case
+        when st_status = 'finished' then null
+        when new_turn in ('a', 'b')
+          then now() + make_interval(secs => public.pvp_turn_seconds())
+        else null
+      end,
       status = case when st_status = 'finished' then 'seated' else 'playing' end,
       ready_a = case when st_status = 'finished' then false else ready_a end,
       ready_b = case when st_status = 'finished' then false else ready_b end,
       last_active_at = now()
   where room_code = code
-    and (player_a_id = uid or player_b_id = uid);
+    and (player_a_id = uid or player_b_id = uid)
+    -- 已结算过就不再覆盖，理由同 pvp_report_state：
+    -- reap_turn_timeouts 判负结算后，超时者手上在途的 ongoing 上报会走到这里，
+    -- 不挡住就会把 finished / scored 抹掉并把桌子改回 playing。
+    and (game_state->>'scored') is distinct from 'true';
 
   if not found then
+    -- 已经离席（或被踢）、或本局已结算
     return true;
   end if;
 
@@ -1126,6 +1805,7 @@ begin
       ready_a = false,
       ready_b = false,
       current_turn_id = null,
+      turn_deadline_at = null,
       last_active_at = now()
   where id = tid
     and (player_a_id = uid or player_b_id = uid);
@@ -1160,9 +1840,10 @@ begin
 
   update public.private_rooms
   set status = 'seated',
-      current_turn_id = null,
       ready_a = false,
       ready_b = false,
+      current_turn_id = null,
+      turn_deadline_at = null,
       last_active_at = now()
   where room_code = code
     and (player_a_id = uid or player_b_id = uid);
@@ -1175,6 +1856,60 @@ $$;
 -- ============================================================
 -- 8. 校验
 -- ============================================================
+
+-- 列必须在（0.7 里的加列跑过了）
+select c.relname as table_name, a.attname as column_name, format_type(a.atttypid, a.atttypmod) as data_type
+  from pg_attribute a
+  join pg_class c on c.oid = a.attrelid
+  join pg_namespace n on n.oid = c.relnamespace
+ where n.nspname = 'public'
+   and a.attname = 'turn_deadline_at'
+   and not a.attisdropped
+ order by 1;
+
+-- 秒数来源：客户端和服务端读的是同一个值
+select public.pvp_turn_seconds() as turn_seconds;
+
+-- 对局中每一行的截止时间和剩余秒数。
+-- 人机桌不在其中（服务端无 current_turn_id），预期 0 行。
+-- secs_left 为 null = 没有行动方或不在倒计时；< 0 = 已过期，
+-- reap_turn_timeouts 会在一分钟内判负。
+select 'pvp' as tbl, id::text as tbl_id, status, current_turn_id is not null as has_turn,
+       turn_deadline_at,
+       public.turn_secs_left(id::text, null) as secs_left
+  from public.pvp_tables
+ where status = 'playing'
+union all
+select 'room', room_code::text, status, current_turn_id is not null,
+       turn_deadline_at,
+       public.turn_secs_left(null, room_code)
+  from public.private_rooms
+ where status = 'playing'
+order by secs_left;
+
+-- 残留截止时间：非对局中却有 deadline 的话，下一次 reap_turn_timeouts
+-- 可能误判。预期 0 行；非 0 说明某个清场分支漏了置空。
+select 'pvp' as tbl, id::text as tbl_id, status
+  from public.pvp_tables
+ where turn_deadline_at is not null
+   and (status <> 'playing' or current_turn_id is null)
+union all
+select 'room', room_code::text, status
+  from public.private_rooms
+ where turn_deadline_at is not null
+   and (status <> 'playing' or current_turn_id is null);
+
+-- 本次刚堵的写回竞态：已结算的桌子又变回 playing，说明还有别的上报路径
+-- 能覆盖 scored（预期 0 行；这两列都不是 playing 才算通过）
+select 'pvp 结算后复活' as check_name, count(*) as cnt
+  from public.pvp_tables
+ where status = 'playing'
+   and (game_state->>'scored') = 'true'
+union all
+select 'room 结算后复活', count(*)
+  from public.private_rooms
+ where status = 'playing'
+   and (game_state->>'scored') = 'true';
 
 select '坐下后仍残留 finished（换人未重置）' as check_name, count(*) as cnt
   from public.pvp_tables
@@ -1228,7 +1963,8 @@ order by secs_left;
 -- 9. 收尾校验
 --
 -- 期望输出：
---   第一段（cron）：只剩 reap-stale-seats 一条，active 为 true。
+--   第一段（cron）：只剩 reap-stale-seats 和 reap-turn-timeouts 两条，
+--     都是每分钟（* * * * *），active 为 true。
 --     4 条 *-release-stale-* 是这次撤掉的，不该再出现。
 --     3 条 *-purge-offline-watchers 保持原样、继续用 3 分钟，
 --     它们这次没动过，同样不该出现在结果里。
@@ -1244,9 +1980,12 @@ order by secs_left;
 --       alter table public.private_room_watchers drop column if exists lease;
 --       alter table public.pve_watchers          drop column if exists lease;
 -- ============================================================
+-- 期望：reap-stale-seats（每分钟）+ reap-turn-timeouts（每分钟），
+-- 其余 *-release-stale-* 这次撤掉的、不该再出现。
 select jobname, schedule, active
   from cron.job
  where jobname in ('reap-stale-seats',
+                   'reap-turn-timeouts',
                    'reap-offline-watchers',
                    'pvp-release-stale-playing',
                    'pvp-release-stale-seats',
@@ -1264,7 +2003,8 @@ select p.proname,
   join pg_namespace n on n.oid = p.pronamespace
  where n.nspname = 'public'
    and p.proname in ('pvp_heartbeat', 'room_heartbeat', 'pve_heartbeat',
-                     'reap_stale_seats', 'reap_offline_watchers')
+                     'reap_stale_seats', 'reap_offline_watchers',
+                     'reap_turn_timeouts', 'turn_secs_left', 'pvp_turn_seconds')
  order by p.proname;
 
 -- 租约列不该存在（如果之前跑过租约版，加列语句会留下空列）
