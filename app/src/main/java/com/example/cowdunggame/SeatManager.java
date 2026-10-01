@@ -4,8 +4,9 @@
 //   入座：坐下当玩家（pve_sit）/ 坐下当观众（pve_watch）
 //   退出：玩家停摆直接离座（pve_leave）/ 观众直接退观（pve_unwatch）
 //   判负：玩家对局中退出 = 判负写库 + 释放座位（pve_forfeit，原子）
-//   遗言：进程存活期间周期心跳刷新 last_active_at（startHeartbeat），
-//         服务端定时任务兜底释放超时座位（见 pve_tables.sql）。
+//   遗言：进程存活期间周期心跳刷新 last_a_at / last_b_at（startHeartbeat），
+//         切后台停发、回前台补发（onPause / onResume），
+//         服务端 60 秒收不到心跳就判负（见 fix_round_lifecycle.sql）。
 // 约定：
 //   - 所有 RPC 在后台线程执行，结果通过 callback 回到主线程；
 //   - callback 允许为 null（纯写库，不关心结果，如 onDestroy 遗言）。
@@ -29,6 +30,9 @@ public class SeatManager {
     private final Handler heartbeatHandler = new Handler(Looper.getMainLooper());
     private Runnable heartbeatRunnable;
     private String heartbeatTableId;
+    // 本轮心跳的种类：pve / pvp / room。切后台停发时要记住它，
+    // 好让 onResume 能按同一种继续，而不是依赖调用方再 start 一次。
+    private String heartbeatMode;
 
     public SeatManager(SupabaseClient client) {
         this.client = client;
@@ -69,7 +73,12 @@ public class SeatManager {
         background(new Runnable() {
             @Override
             public void run() {
-                boolean ok = client != null && client.pveLeave(tableId);
+                boolean ok = client != null && leaveWithRetry(new RpcCall() {
+                    @Override
+                    public boolean run() {
+                        return client.pveLeave(tableId);
+                    }
+                });
                 deliver(cb, ok, ok ? "已离座" : "离座失败");
             }
         });
@@ -80,7 +89,12 @@ public class SeatManager {
         background(new Runnable() {
             @Override
             public void run() {
-                boolean ok = client != null && client.pveUnwatch(tableId);
+                boolean ok = client != null && leaveWithRetry(new RpcCall() {
+                    @Override
+                    public boolean run() {
+                        return client.pveUnwatch(tableId);
+                    }
+                });
                 deliver(cb, ok, ok ? "已退出观战" : "退出观战失败");
             }
         });
@@ -105,33 +119,80 @@ public class SeatManager {
 
     // 进程存活期间周期上报心跳（刷新 last_active_at，防止被服务端误清）
     public void startHeartbeat(final String tableId) {
-        stopHeartbeat();
-        heartbeatTableId = tableId;
+        startLoop(tableId, "pve");
+    }
+
+    public void stopHeartbeat() {
+        stopLoop();
+        heartbeatTableId = null;
+        heartbeatMode = null;
+    }
+
+    // ---- 前台 / 后台切换（配合 Activity 的 onResume / onPause）----
+    //
+    // 切后台就停发心跳，回前台立刻补发。
+    //
+    // 为什么不「后台继续发」：判负规则是 60 秒无条件，超时就是输。
+    // 如果后台照发，App 被系统冻结 / Doze / 进程被杀时心跳自然会断，
+    // 而在「还能跑」的情况下又一直续命 —— 表现就是同一种行为
+    // （人不在）有时判负有时不判负，全看系统在什么时候冻结进程。
+    // 停掉之后规则是确定的：离开界面 → 心跳断 → 60 秒后判负，
+    // 对手最多等 60 秒。
+    //
+    // 锁屏、来电、系统弹窗同样会走到 onPause，同样 60 秒判负。
+    // 这是「60 秒无条件」的直接后果，如果嫌太紧只能把 60 秒调大，
+    // 而不是给后台开特例。
+    public void pauseHeartbeat() {
+        stopLoop();
+    }
+
+    // 回前台：立刻补一次，让服务端重新看到人。
+    // 此时可能已经判负了（超过 60 秒），补发只是让服务端尽快收敛，
+    // 真正的根治是把倒计时放服务端（见 fix_round_lifecycle.sql 第 6 节说明）。
+    public void resumeHeartbeat() {
+        if (heartbeatTableId == null || heartbeatMode == null) return;
+        if (heartbeatRunnable != null) return;   // 循环还在跑，onCreate 刚起过
+        startLoop(heartbeatTableId, heartbeatMode);
+    }
+
+    private void startLoop(final String id, final String mode) {
+        stopLoop();
+        heartbeatTableId = id;
+        heartbeatMode = mode;
+        // 先立刻发一次：入座不该等满 20 秒才让服务端看到
+        sendHeartbeat(id, mode);
         heartbeatRunnable = new Runnable() {
             @Override
             public void run() {
-                sendHeartbeat(heartbeatTableId);
+                sendHeartbeat(heartbeatTableId, heartbeatMode);
                 heartbeatHandler.postDelayed(this, HEARTBEAT_INTERVAL_MS);
             }
         };
         heartbeatHandler.post(heartbeatRunnable);
     }
 
-    public void stopHeartbeat() {
+    // 只停周期回调，保留 id / mode
+    private void stopLoop() {
         if (heartbeatRunnable != null) {
             heartbeatHandler.removeCallbacks(heartbeatRunnable);
             heartbeatRunnable = null;
         }
-        heartbeatTableId = null;
     }
 
-    private void sendHeartbeat(final String tableId) {
-        if (client == null || tableId == null) return;
+    // 三种心跳统一在这里分发
+    private void sendHeartbeat(final String id, final String mode) {
+        if (client == null || id == null || mode == null) return;
         background(new Runnable() {
             @Override
             public void run() {
                 try {
-                    client.pveHeartbeat(tableId);
+                    if ("pvp".equals(mode)) {
+                        client.pvpHeartbeat(id);
+                    } else if ("room".equals(mode)) {
+                        client.roomHeartbeat(id);
+                    } else {
+                        client.pveHeartbeat(id);
+                    }
                 } catch (Exception ignore) { }
             }
         });
@@ -168,7 +229,12 @@ public class SeatManager {
         background(new Runnable() {
             @Override
             public void run() {
-                boolean ok = client != null && client.pvpLeave(tableId);
+                boolean ok = client != null && leaveWithRetry(new RpcCall() {
+                    @Override
+                    public boolean run() {
+                        return client.pvpLeave(tableId);
+                    }
+                });
                 deliver(cb, ok, ok ? "已离座" : "离座失败");
             }
         });
@@ -179,7 +245,12 @@ public class SeatManager {
         background(new Runnable() {
             @Override
             public void run() {
-                boolean ok = client != null && client.pvpUnwatch(tableId);
+                boolean ok = client != null && leaveWithRetry(new RpcCall() {
+                    @Override
+                    public boolean run() {
+                        return client.pvpUnwatch(tableId);
+                    }
+                });
                 deliver(cb, ok, ok ? "已退出观战" : "退出观战失败");
             }
         });
@@ -196,30 +267,9 @@ public class SeatManager {
         });
     }
 
-    // 本桌玩家：进程存活期间周期心跳（复用 startHeartbeat 的发送器，改发 pvp_heartbeat）
+    // 本桌玩家：进程存活期间周期心跳（改发 pvp_heartbeat）
     public void startPvpHeartbeat(final String tableId) {
-        stopHeartbeat();
-        heartbeatTableId = tableId;
-        heartbeatRunnable = new Runnable() {
-            @Override
-            public void run() {
-                sendPvpHeartbeat(heartbeatTableId);
-                heartbeatHandler.postDelayed(this, HEARTBEAT_INTERVAL_MS);
-            }
-        };
-        heartbeatHandler.post(heartbeatRunnable);
-    }
-
-    private void sendPvpHeartbeat(final String tableId) {
-        if (client == null || tableId == null) return;
-        background(new Runnable() {
-            @Override
-            public void run() {
-                try {
-                    client.pvpHeartbeat(tableId);
-                } catch (Exception ignore) { }
-            }
-        });
+        startLoop(tableId, "pvp");
     }
 
     // ============================================================
@@ -312,7 +362,12 @@ public class SeatManager {
         background(new Runnable() {
             @Override
             public void run() {
-                boolean ok = client != null && client.roomLeave(code);
+                boolean ok = client != null && leaveWithRetry(new RpcCall() {
+                    @Override
+                    public boolean run() {
+                        return client.roomLeave(code);
+                    }
+                });
                 deliver(cb, ok, ok ? "已退出房间" : "退出房间失败");
             }
         });
@@ -334,36 +389,20 @@ public class SeatManager {
         background(new Runnable() {
             @Override
             public void run() {
-                boolean ok = client != null && client.roomUnwatch(code);
+                boolean ok = client != null && leaveWithRetry(new RpcCall() {
+                    @Override
+                    public boolean run() {
+                        return client.roomUnwatch(code);
+                    }
+                });
                 deliver(cb, ok, ok ? "已退出观战" : "退出观战失败");
             }
         });
     }
 
-    // 本房间玩家：进程存活期间周期心跳
+    // 本房间玩家：进程存活期间周期心跳（改发 room_heartbeat）
     public void startRoomHeartbeat(final String code) {
-        stopHeartbeat();
-        heartbeatTableId = code;
-        heartbeatRunnable = new Runnable() {
-            @Override
-            public void run() {
-                sendRoomHeartbeat(heartbeatTableId);
-                heartbeatHandler.postDelayed(this, HEARTBEAT_INTERVAL_MS);
-            }
-        };
-        heartbeatHandler.post(heartbeatRunnable);
-    }
-
-    private void sendRoomHeartbeat(final String code) {
-        if (client == null || code == null) return;
-        background(new Runnable() {
-            @Override
-            public void run() {
-                try {
-                    client.roomHeartbeat(code);
-                } catch (Exception ignore) { }
-            }
-        });
+        startLoop(code, "room");
     }
 
     // 回调：返回字符串（房间号 / 坐席 'a'|'b'）
@@ -457,6 +496,41 @@ public class SeatManager {
     private void background(Runnable r) {
         if (r == null || client == null) return;
         new Thread(r).start();
+    }
+
+    // 一次 RPC 调用（留出接口是为了给退避重试包一层）
+    private interface RpcCall {
+        boolean run();
+    }
+
+    // 离席 / 退观战一律走这里加重试。
+    //
+    // 这些调用多半是 fire-and-forget：LocalGameActivity.onDestroy 里
+    // 发出去就返回了（甚至紧接着 finish()），用户「退出」这个动作的
+    // 结果完全取决于这一个请求有没有送到。原来只发一次，失败就静默放弃，
+    // 于是座位要一直等到 60 秒心跳超时才被回收器判负 ——
+    // 对手白等一分钟，对局凭空卡住。
+    //
+    // 这里做 4 次尝试、约 4.6 秒退避，覆盖绝大多数瞬时失败（弱网、
+    // 切基站、刚离开 WiFi）。仍然失败也不阻塞：后台线程里等完就结束，
+    // 最终由服务端回收器兜底，分数不会算错，只是释放晚一点。
+    private boolean leaveWithRetry(RpcCall call) {
+        if (call == null) return false;
+        long[] backoffMs = {0L, 400L, 1200L, 3000L};
+        for (long wait : backoffMs) {
+            if (wait > 0L) {
+                try {
+                    Thread.sleep(wait);
+                } catch (InterruptedException e) {
+                    Thread.currentThread().interrupt();
+                    return false;
+                }
+            }
+            try {
+                if (call.run()) return true;
+            } catch (Exception ignore) { }
+        }
+        return false;
     }
 
     private void deliver(final ResultCallback cb, final boolean ok, final String message) {

@@ -811,6 +811,18 @@ public class LocalGameActivity extends Activity {
             }
         } else {
             // 尚未开局：等待双方就绪
+            // 换人时服务端会把上一局的 game_state 重置成空局（status='open'）。
+            // 本地若还停在上一局，必须把 isGameStarted 落下，否则新一局开局时
+            // 不会走重置分支，旧棋谱和旧结算状态会带进新一局。
+            if (isGameStarted && !"ongoing".equals(gsStatus) && !"finished".equals(gsStatus)) {
+                isGameStarted = false;
+            }
+            // 同理要清掉上一局的结果图：否则「等待开局」的日志上面
+            // 还压着上一局的胜负图，按钮也被 pvpResultShown 卡住不能点。
+            if (pvpResultShown) {
+                hideResultImage();
+                pvpResultShown = false;
+            }
             if (btnAction != null && !isGameStarted && !pvpResultShown) {
                 boolean full = SeatManager.isPvpFull(table);
                 boolean iReady = SeatManager.iAmReady(table, uid);
@@ -2307,6 +2319,28 @@ public class LocalGameActivity extends Activity {
     private void playLose() {
         if (soundEnabled && soundPool != null && soundLose != 0) {
             soundPool.play(soundLose, 1.0f, 1.0f, 1, 0, 1.0f);
+        }
+    }
+
+    // 切后台：停发心跳。判负规则是 60 秒无条件，所以切后台 / 锁屏 /
+    // 来电 / 系统弹窗都会在 60 秒后被判负 —— 锁屏和切后台在这里没有区别。
+    // 这是刻意的：给后台开缓冲的话，同一种「人不在」有时判负有时不判负，
+    // 对手也不知道该等多久。规则统一比规则宽松重要。
+    @Override
+    protected void onPause() {
+        if (seatManager != null) {
+            seatManager.pauseHeartbeat();
+        }
+        super.onPause();
+    }
+
+    // 回前台：立刻补一次心跳，让服务端重新看到人。
+    // 超过 60 秒的话可能已经判负了，补发只是让服务端尽快收敛。
+    @Override
+    protected void onResume() {
+        super.onResume();
+        if (seatManager != null) {
+            seatManager.resumeHeartbeat();
         }
     }
 
