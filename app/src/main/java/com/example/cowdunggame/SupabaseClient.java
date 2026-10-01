@@ -420,13 +420,17 @@ public class SupabaseClient {
     // ============================================================
 
     // 拉取全部 PvP 桌状态（按桌号升序）：
-    //   {id, num, status, player_a_id, player_b_id, current_turn_id, ready_a, ready_b,
-    //    game_state, watcher_count, player_a:{gender,nickname}(若 A 坐), player_b:{...}}
+    //   {id, num, status, player_a_id, player_b_id, watcher_count,
+    //    player_a:{gender,nickname}(若 A 坐), player_b:{...}}
+    // 只列大厅卡面真正读的列。原来用 select=* 把 game_state（整局棋谱
+    // + flowers）也拖回来，20 桌每 3 秒一次纯属浪费 —— isPvpPlaying 读的是
+    // status 列，hasPlayerA/B 读的是 player_a_id/player_b_id，都不看 game_state。
     public JSONArray fetchPvpTables() {
         try {
             if (!ensureFreshToken() || accessToken == null) return null;
             String urlStr = PROJECT_URL
-                + "/rest/v1/pvp_tables?select=*,player_a:profiles!pvp_tables_player_a_id_fkey(gender,nickname,id),"
+                + "/rest/v1/pvp_tables?select=id,num,status,player_a_id,player_b_id,watcher_count,"
+                + "player_a:profiles!pvp_tables_player_a_id_fkey(gender,nickname,id),"
                 + "player_b:profiles!pvp_tables_player_b_id_fkey(gender,nickname,id)&order=num";
             URL url = new URL(urlStr);
             HttpURLConnection conn = (HttpURLConnection) url.openConnection();
