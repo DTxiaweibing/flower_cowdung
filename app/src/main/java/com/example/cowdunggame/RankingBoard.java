@@ -128,12 +128,13 @@ public class RankingBoard {
                     public void run() {
                         pb.setVisibility(View.GONE);
                         sv.setVisibility(View.VISIBLE);
-                        // 我的排名
+                        // 我的排名 + 升级进度（差多少积分升下一职务）
                         if (myRank != null && myRank.optInt("rank", 0) > 0) {
                             int r = myRank.optInt("rank", 0);
                             int sc = myRank.optInt("score", 0);
                             myRankView.setText("我的排名：第 " + r + " 名 · 积分 " + sc
-                                    + " · 军衔 " + ProfilePopup.levelName(sc));
+                                    + " · 职务 " + ProfilePopup.levelName(sc)
+                                    + "\n" + ProfilePopup.upgradeHint(sc));
                         } else {
                             myRankView.setText("我的排名：暂无");
                         }
@@ -166,7 +167,7 @@ public class RankingBoard {
                             }
                             row.setPadding(0, dp(act, 6), 0, dp(act, 6));
 
-                            // 头部：序号 | 昵称(性别点) | 军衔 | 总积分
+                            // 头部：序号 | 昵称(性别点) | 职务 | 总积分
                             LinearLayout head = new LinearLayout(act);
                             head.setOrientation(LinearLayout.HORIZONTAL);
                             head.setGravity(Gravity.CENTER_VERTICAL);
