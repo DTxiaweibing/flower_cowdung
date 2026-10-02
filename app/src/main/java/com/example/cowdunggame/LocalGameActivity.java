@@ -174,6 +174,16 @@ public class LocalGameActivity extends Activity {
     private static final int PLAYER_TURN_SECONDS = 180;
     private static final int COMPUTER_THINK_SECONDS = 5;
 
+    // 人人桌/私密房间在 turn_secs_left 还没到的那几拍，先拿这个值把数字走起来。
+    // 刻意和服务端 pvp_turn_seconds() 的 60 对齐：真值补回来时顶多差一两秒，
+    // 用户看不出跳变，却换来了「取不到也一定有数字」。
+    // 只影响显示，判负仍然只由服务端做。
+    private static final int PVP_DISPLAY_FALLBACK_SECONDS = 60;
+    // turn_secs_left 失败时的重试次数与退避间隔。3 次 × 400ms ≈ 1.2s，
+    // 刚好盖住一次常见的网络抖动，又不至于拖到玩家以为卡死。
+    private static final int SECS_LEFT_FETCH_RETRIES = 3;
+    private static final long SECS_LEFT_RETRY_DELAY_MS = 400L;
+
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
@@ -805,7 +815,10 @@ public class LocalGameActivity extends Activity {
                 refreshServerSecsLeft();
                 stopCountdown();
                 setupGameBoard(isPlayerTurn);
-                if (isPlayerTurn) startCountdown(true, serverSecsLeftOrDefault());
+                // 不加 if (isPlayerTurn) 门控：对手回合也要起倒计时，
+                // 否则只在轮到自己时那格有数字，另一格全程空白 ——
+                // 先入座和后入座看到的就是两套不同画面。
+                startCountdown(isPlayerTurn, serverSecsLeftOrDefault());
             } else {
                 // 同步对方落子后的棋盘 & 回合
                 String turn = gs.optString("turn", "");
@@ -844,7 +857,10 @@ public class LocalGameActivity extends Activity {
                     refreshServerSecsLeft();
                     stopCountdown();
                     setupGameBoard(isPlayerTurn);
-                    if (isPlayerTurn) startCountdown(true, serverSecsLeftOrDefault());
+                    // 回合翻转：倒计时跟着换到新的行动方那格（理由见开局分支）。
+                    // isPlayerTurn 翻转后传给 startCountdown，就自动把两侧
+                    // 位置对调，A/B 两个玩家看到的画面因此完全对称。
+                    startCountdown(isPlayerTurn, serverSecsLeftOrDefault());
                 }
             }
         } else {
@@ -1386,7 +1402,25 @@ public class LocalGameActivity extends Activity {
         resetSelectionState();
         setupGameBoard(true);
         if (isPvp || isRoom) {
-            reportPvpState("ongoing", "a".equals(mySide) ? "b" : "a", "");
+            // 上一行已经 isPlayerTurn = false，也就是本地先把回合交给了对方，
+            // 而服务端此刻还停在「轮到我」—— 轮询要等下一次才读得到新的 turn，
+            // 并且因为 isPlayerTurn 已经是 false，那个翻转分支根本不会进
+            // （false != false）。所以对手那格的倒计时必须在这里自己起，
+            // 否则谁刚提交完自己那手，谁的屏幕上就空一整个对手回合。
+            // 同一函数下面的 PvE 分支本来就有 startCountdown，只有人人漏了。
+            //
+            // 先作废基线：不作废的话 serverSecsLeft 还是我自己这一回合的残值，
+            // 会被原样搬到对方那格，显示成「对手只剩 0:02」这种假象。
+            invalidateServerSecsLeft();
+            // 兜底值先点亮，别让玩家对着空格等一个 RTT。
+            startCountdown(isPlayerTurn, PVP_DISPLAY_FALLBACK_SECONDS);
+            reportPvpState("ongoing", "a".equals(mySide) ? "b" : "a", "", new Runnable() {
+                @Override
+                public void run() {
+                    // 上报已落库，这时查到的才是「对手这一回合」的秒数。
+                    refreshServerSecsLeft();
+                }
+            });
             btnAction.setEnabled(false);
             btnAction.setText("对方回合中...");
             return;
@@ -1602,6 +1636,14 @@ public class LocalGameActivity extends Activity {
 
     // 人人对局（PvP）整包上报：走 pvp_report_state，side 用 'a'/'b'
     private void reportPvpState(final String status, final String turn, final String winner) {
+        reportPvpState(status, turn, winner, null);
+    }
+
+    // afterCommitted 在这次上报落库之后于主线程回调。
+    // 需要「先写后读」时必须用它：pvp_report_state 是异步的，紧接着去查
+    // turn_secs_left 会和这次写入赛跑，读到的还是上一个回合的秒数。
+    private void reportPvpState(final String status, final String turn, final String winner,
+                                final Runnable afterCommitted) {
         if (isWatcher || client == null || tableNo == null) return;
         final JSONObject state = new JSONObject();
         try {
@@ -1625,6 +1667,13 @@ public class LocalGameActivity extends Activity {
                 } else {
                     client.pvpReportState(tableNo, state);
                 }
+                if (afterCommitted == null) return;
+                runOnUiThread(new Runnable() {
+                    @Override
+                    public void run() {
+                        afterCommitted.run();
+                    }
+                });
             }
         });
     }
@@ -1895,17 +1944,17 @@ public class LocalGameActivity extends Activity {
         handleExitPress();
     }
 
-    // 私密房间不是从大厅进来的（MenuActivity -> 房间号页 -> 棋局页），
-    // 退出时直接清栈回初始页，不把房间号页留在返回栈里。
+    // 私密房间的返回栈是 MenuActivity -> 房间号页 -> 棋局页，而房间页在
+    // enterGame() 里故意没有 finish，所以一直留在栈里。既然在，「离开棋局」
+    // 只要 finish 就会退回房间号页：房间页 onResume 会重新轮询，render() 把
+    // mySide 重算成 null，正好回到「刚进房间、还没坐下」的样子 —— 座位已让出，
+    // 点桌卡可以重新坐下，要回初始页得自己再点一次「退出房间」。
+    //
+    // 早先这里对 isRoom 直接 CLEAR_TASK 回初始页，把房间页从栈里抹掉了，
+    // 房间页那句「不 finish，保留房间页在返回栈」的注释从来没兑现过。
+    // PvP / 人机本来就没有房间页，finish 各自退回大厅 / 主界面，不用分叉。
     private void finishOrHome() {
-        if (!isRoom) {
-            finish();
-            return;
-        }
         leavingTable = true;
-        Intent home = new Intent(this, MenuActivity.class);
-        home.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_CLEAR_TASK);
-        startActivity(home);
         finish();
     }
 
@@ -1925,6 +1974,15 @@ public class LocalGameActivity extends Activity {
             }
         }
         android.widget.Toast.makeText(this, message, android.widget.Toast.LENGTH_LONG).show();
+        if (isRoom) {
+            // 唯一不能退回房间页的情况：房间已经被服务端关掉了。房间页 pollOnce
+            // 对 fetchRoom 返回 null 只改文案、不 finish（见 PrivateRoomActivity:168），
+            // 退回去就是个「房间不存在」的死页，得再点一次退出房间。房间都没了，
+            // 没有再待下去的意义，直接清栈回初始页。
+            Intent home = new Intent(this, MenuActivity.class);
+            home.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_CLEAR_TASK);
+            startActivity(home);
+        }
         finishOrHome();
     }
 
@@ -2038,7 +2096,12 @@ public class LocalGameActivity extends Activity {
         // serverSecsLeft（每轮询刷新）。这里保留本地自减作为兜底：
         // 轮询失败时数字仍在走，总比卡住不动好。
         countdownSeconds = seconds;
-        // 倒计时挂在「我」所在的那一侧：我是后入座(B)时跑右格，不是左格
+        // 倒计时挂在「当前行动方」那一侧，而不是固定挂在某一侧：
+        // playerSide = true 表示行动方是我 -> 挂我这格；false 表示行动方是对手
+        // -> 挂对手那格。后入座(B)的人看到的左右与先入座(A)的人是镜像的，
+        // 但两边都满足同一条规则：谁在想，倒计时就在谁那格。
+        // 与手指的规则严格相反且互补：手指 updateTurnFinger 亮「非行动方」，
+        // 所以 A 回合 = A 处倒计时 + B 处手指，B 回合 = B 处倒计时 + A 处手指。
         final TextView tv = playerSide ? myCountdownView() : opponentCountdownView();
         final TextView other = playerSide ? opponentCountdownView() : myCountdownView();
         other.setVisibility(View.INVISIBLE);
@@ -2067,11 +2130,18 @@ public class LocalGameActivity extends Activity {
                     + " computed=" + countdownSeconds
                     + " baselineMs=" + serverBaselineMs);
             if (countdownSeconds < 0) {
-                // 还没拿到服务端剩余秒数。不显示倒计时，等 RPC 回来
-                // （refreshServerSecsLeft 的回调会重进这里）再起。
-                // 直接用 180 兜底会先闪一个「3:00」再跳成「1:00」。
-                tv.setVisibility(View.INVISIBLE);
-                return;
+                // 服务端秒数还没到手（RPC 在路上，或刚失败过一次）。
+                // 这里绝不能 return 把 tv 藏掉 —— refreshServerSecsLeft 失败时
+                // 是没有回调来补救的，于是这一整个回合那格都是空的。
+                // 对手那格以前从不显示，所以这条只在我把倒计时铺到两侧之后
+                // 才暴露成「对手的显示时有时无」。
+                //
+                // 改成用本地兜底先把数字走起来，RPC 回来后
+                // restartCountdownAfterServerValue 会把它纠正成真值。
+                // 兜底取 60，与服务端 pvp_turn_seconds() 一致，
+                // 所以真值到达时顶多差一两秒，看不出跳变。
+                // 判负仍然只由服务端做，这里的数字纯粹是给人看的。
+                countdownSeconds = PVP_DISPLAY_FALLBACK_SECONDS;
             }
         }
         updateCountdownText(tv);
@@ -2081,7 +2151,13 @@ public class LocalGameActivity extends Activity {
                 if (serverAuthoritative) {
                     // 每 tick 重算，不做「和快照比对再重置」——
                     // 那样会和常量基线互相拉扯，数字在两三个值之间来回抖。
-                    countdownSeconds = serverSecsLeftOrDefault();
+                    final int srv = serverSecsLeftOrDefault();
+                    // 中途取不到（基线作废、重试又失败）就沿用上一拍的数字
+                    // 继续走。直接把这个 -1 写进 countdownSeconds 会被下面的
+                    // <= 0 判成归零，于是凭空发一次 requestServerTimeoutCheck
+                    // 并且把数字藏掉 —— 又是一个「时有时无」。
+                    if (srv >= 0) countdownSeconds = srv;
+                    else if (countdownSeconds > 0) countdownSeconds--;
                 } else if (countdownSeconds > 0) {
                     countdownSeconds--;
                 }
@@ -2132,29 +2208,74 @@ public class LocalGameActivity extends Activity {
         if (imgComputerFinger != null) imgComputerFinger.setVisibility(View.INVISIBLE);
     }
 
+    // 作废服务端秒数基线，让下一次 startCountdown 退回兜底值。
+    // 换回合时必须先作废：旧基线是「上一回合」的，直接沿用会把上一回合
+    // 的残值显示到新回合的那一格上。
+    private void invalidateServerSecsLeft() {
+        serverSecsLeft = -1;
+        serverBaselineMs = 0L;
+    }
+
     // 拉服务端算好的本轮剩余秒数（人人桌 / 私密房间），并把单调时钟基线对齐到此刻。
     // 拉不到就保持原值不动：倒计时继续用上一次的值走，判负本来也不靠它。
+    //
+    // 失败会重试几次：换回合时这一拍正好把 serverSecsLeft 作废成 -1，
+    // 如果这一次 RPC 恰好因为网络抖动失败，旧代码就直接 return 了，
+    // 既没人来补显、也没人重试，整回合的秒数都停在 -1。
     private void refreshServerSecsLeft() {
+        refreshServerSecsLeft(0);
+    }
+
+    private void refreshServerSecsLeft(final int attempt) {
         if (!isPvp && !isRoom) return;
         if (isWatcher || client == null || tableNo == null) return;
         final String tId = isRoom ? null : tableNo;
         final String rCode = isRoom ? tableNo : null;
+        // 记下这次请求是给哪一拍的。回合在飞行途中翻了的话，这份响应就是
+        // 上一回合的旧秒数，直接写进基线会让新回合的显示跳成一个无关的数字 ——
+        // 尤其是加了重试之后，窗口比原来长得多。
+        final boolean askedForMyTurn = isPlayerTurn;
         // 换回合了：旧基线作废，等这次的服务器值回来再重建。
-        serverSecsLeft = -1;
-        serverBaselineMs = 0L;
+        // 只在第一拍作废 —— 重试不能碰基线，否则会把已经建好的
+        // serverSecsLeft 又抹成 -1，等于自己制造一次「取不到值」。
+        if (attempt == 0) {
+            invalidateServerSecsLeft();
+        }
         async(new Runnable() {
             @Override
             public void run() {
                 final int left = client.turnSecsLeft(tId, rCode);
-                if (left < 0) return;
+                if (left < 0) {
+                    if (attempt < SECS_LEFT_FETCH_RETRIES) {
+                        // 主线程上按 400ms 退避重试。startCountdown 那边已经用
+                        // 兜底值让数字走起来了，所以这几拍只是把真值补回来。
+                        final int next = attempt + 1;
+                        runOnUiThread(new Runnable() {
+                            @Override
+                            public void run() {
+                                if (askedForMyTurn != isPlayerTurn) return; // 回合已翻，旧值作废
+                                countdownHandler.postDelayed(new Runnable() {
+                                    @Override
+                                    public void run() {
+                                        refreshServerSecsLeft(next);
+                                    }
+                                }, SECS_LEFT_RETRY_DELAY_MS);
+                            }
+                        });
+                    } else {
+                        Log.d("TurnDebug", "turnSecsLeft gave up after "
+                                + (attempt + 1) + " tries, keeping local fallback");
+                    }
+                    return;
+                }
                 runOnUiThread(new Runnable() {
                     @Override
                     public void run() {
+                        if (askedForMyTurn != isPlayerTurn) return; // 回合已翻，旧值作废
                         serverSecsLeft = left;
                         serverBaselineMs = android.os.SystemClock.elapsedRealtime();
-                        // startCountdown 在拿不到值时会隐藏 tv 直接返回，
-                        // 所以这里拿到值后必须把倒计时重新起一次，
-                        // 否则界面就一直空着（RPC 比 startCountdown 晚几百毫秒回来）。
+                        // startCountdown 已经先用兜底值把数字走起来了，
+                        // 这里拿到真值后要重新起一次纠正回来。
                         restartCountdownAfterServerValue();
                     }
                 });
@@ -2202,16 +2323,12 @@ public class LocalGameActivity extends Activity {
         });
     }
 
-    // 服务端剩余秒数到位后补起倒计时。
-    // startCountdown 拿不到服务端值时会放弃启动（避免先闪一个 PvE 的 3:00），
-    // 这个方法在 RPC 回调里把它重新拉起来。
+    // 服务端剩余秒数到位后把倒计时纠正回真值。
+    // startCountdown 现在拿不到服务端值时也会用兜底值先走起来，
+    // 所以这里是在「兜底数字」之上覆盖成真值，而不是从空白里救活它。
     private void restartCountdownAfterServerValue() {
         if (countdownPlayerSide == null) return;
-        final boolean wasWaiting = countdownSeconds < 0;
         startCountdown(countdownPlayerSide, serverSecsLeftOrDefault());
-        if (wasWaiting && tvCountdownFor(countdownPlayerSide) != null) {
-            tvCountdownFor(countdownPlayerSide).setVisibility(View.VISIBLE);
-        }
     }
 
     private TextView tvCountdownFor(boolean side) {
