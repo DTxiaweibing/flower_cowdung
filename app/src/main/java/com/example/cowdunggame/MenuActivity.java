@@ -11,11 +11,16 @@ import android.graphics.drawable.GradientDrawable;
 import android.os.Bundle;
 import android.view.Gravity;
 import android.view.View;
+import android.view.ViewGroup;
 import android.widget.Button;
 import android.widget.FrameLayout;
 import android.widget.LinearLayout;
 import android.widget.TextView;
 import android.widget.Toast;
+import androidx.core.graphics.Insets;
+import androidx.core.view.OnApplyWindowInsetsListener;
+import androidx.core.view.ViewCompat;
+import androidx.core.view.WindowInsetsCompat;
 
 public class MenuActivity extends Activity {
 
@@ -107,13 +112,15 @@ public class MenuActivity extends Activity {
         final int menuH = (int) (screenH * 0.20f);   // 两行按钮约占屏高 20%
         final int gap = (int) (screenW * 0.03f);     // 行/列间距随屏宽等比
 
+        // 底部网格与屏幕底边的基础距离；导航栏高度在下面 insets 回调里叠加上去
+        final int baseBottomMargin = (int) (screenH * 0.03f);
         LinearLayout bottomMenu = new LinearLayout(this);
         bottomMenu.setOrientation(LinearLayout.VERTICAL);
         bottomMenu.setGravity(Gravity.CENTER_HORIZONTAL);
         bottomMenu.setWeightSum(2f);
         FrameLayout.LayoutParams bmParams = new FrameLayout.LayoutParams(menuW, menuH);
         bmParams.gravity = Gravity.BOTTOM | Gravity.CENTER_HORIZONTAL;
-        bmParams.bottomMargin = (int) (screenH * 0.03f);
+        bmParams.bottomMargin = baseBottomMargin;
         bottomMenu.setLayoutParams(bmParams);
 
         LinearLayout row1 = newMenuRow(gap, false);
@@ -153,6 +160,29 @@ public class MenuActivity extends Activity {
 
         setContentView(root);
 
+        // targetSdk 36 起 Android 强制 edge-to-edge，内容默认会画到导航栏底下。
+        // 底部这排按钮是 Gravity.BOTTOM 锚定的，于是整整一排压在导航栏上，
+        // 系统给导航栏画的那层半透明遮罩直接盖在按钮上，看着就像「导航栏有颜色」。
+        //
+        // 这里只把导航栏高度让给 bottomMenu，不给 root 加 padding：root 一旦
+        // 加 padding，里面铺满全屏的 FloorView 会被裁到 padding 边界以内，
+        // 让出的那条就会露出主题的浅色 window 背景 —— 那反而更像「导航栏有颜色」。
+        // 只叠 bottomMargin 的话 FloorView 仍然画到屏幕最底边，导航栏那条露出来
+        // 的是地板自己的深色，和 LocalGameActivity 的处理方式一致。
+        ViewCompat.setOnApplyWindowInsetsListener(root, new OnApplyWindowInsetsListener() {
+            @Override
+            public WindowInsetsCompat onApplyWindowInsets(View v, WindowInsetsCompat insets) {
+                Insets bars = insets.getInsets(WindowInsetsCompat.Type.systemBars());
+                ViewGroup.LayoutParams lp = bottomMenu.getLayoutParams();
+                if (lp instanceof FrameLayout.LayoutParams) {
+                    FrameLayout.LayoutParams fp = (FrameLayout.LayoutParams) lp;
+                    fp.bottomMargin = baseBottomMargin + bars.bottom;
+                    bottomMenu.setLayoutParams(fp);
+                }
+                return WindowInsetsCompat.CONSUMED;
+            }
+        });
+
         client = new SupabaseClient(this);
         seatManager = new SeatManager(client);
         if (!client.hasSession()) {
@@ -187,6 +217,10 @@ public class MenuActivity extends Activity {
         b.setTextColor(Color.WHITE);
         b.setAllCaps(false);
         b.setBackground(btnBg());
+        // 主题给 Button 的默认内边距要手动清掉：setBackground 只换掉了背景
+        // drawable，主题 buttonStyle 上的 paddingLeft/Right/Top/Bottom 还在，
+        // 于是文字被挤在中间、四周留出一圈空白，按钮显得比实际格子小一圈。
+        b.setPadding(0, 0, 0, 0);
         LinearLayout.LayoutParams bp = new LinearLayout.LayoutParams(
             0, LinearLayout.LayoutParams.MATCH_PARENT, 1f);
         if (container.getChildCount() > 0) bp.leftMargin = gap;
