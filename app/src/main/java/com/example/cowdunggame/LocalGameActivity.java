@@ -110,10 +110,22 @@ public class LocalGameActivity extends Activity {
     private final View.OnClickListener nameClickListener = new View.OnClickListener() {
         @Override
         public void onClick(View v) {
-            String uid = (v == tvPlayerName) ? tvPlayerNameId : tvComputerNameId;
-            String name = (v == tvPlayerName) ? tvPlayerName.getText().toString()
-                                              : tvComputerName.getText().toString();
-            if (uid != null && !uid.isEmpty()) openProfile(uid, name);
+            boolean left = (v == tvPlayerName);
+            String uid = left ? tvPlayerNameId : tvComputerNameId;
+            String name = left ? tvPlayerName.getText().toString()
+                               : tvComputerName.getText().toString();
+            if (uid != null && !uid.isEmpty()) {
+                openProfile(uid, name);
+            } else {
+                // 之前这里是「什么都不做」，点了像坏了。空位/电脑/未赋值都给出明确反馈。
+                if (left) {
+                    Toast.makeText(LocalGameActivity.this,
+                            "该座位还没有玩家入座", Toast.LENGTH_SHORT).show();
+                } else {
+                    Toast.makeText(LocalGameActivity.this,
+                            "电脑没有资料", Toast.LENGTH_SHORT).show();
+                }
+            }
         }
     };
     private String pvpBNick = "等待对手入座..."; // B 侧昵称
@@ -158,6 +170,18 @@ public class LocalGameActivity extends Activity {
 
     private Handler popupHandler;      // 观众列表弹窗 5 秒自动隐藏
     private PopupWindow watcherPopup;  // 观众列表弹窗（销毁时关闭，避免销毁后 dismiss 异常）
+
+    // ===== 观众「查看资料 / 踢出」=====
+    // 临时禁入时长（分钟）：踢出后对方在此期间无法重新观战本桌。
+    // 只踢不拦等于没踢 —— 对方 1 秒内就能重新点进来观战。
+    private static final int WATCHER_BAN_MINUTES = 10;
+
+    // 当前打开的观众资料窗对应 user_id：用来作废在途的异步排名刷新，
+    // 否则用户点掉资料窗后，迟到的 getUserRank 会把窗口又拉回来。
+    private String watcherInfoOpenId = null;
+
+    // 观众轮询计数：每 N 轮探一次「我是否已被踢」，避免每次轮询都多打一个请求
+    private int watchPollCount = 0;
 
     private SoundPool soundPool;
     private int soundDida;
@@ -552,6 +576,12 @@ public class LocalGameActivity extends Activity {
             if (isPvp || isRoom) {
                 setupPvpPlayerMode();
             } else {
+                // 人机桌：左侧恒为自己、右侧恒为电脑。
+                // 【关键】人机不经过 renderPvpState，tvPlayerNameId 不会被赋值，
+                // 保持 null 会让 nameClickListener 里的判空直接吞掉点击 ——
+                // 表现就是「人机对战点自己昵称没反应」。这里显式补上自己的 uid。
+                if (client != null) tvPlayerNameId = client.getUserId();
+                tvComputerNameId = null;   // 电脑没有账号，不给资料卡
                 setupGameBoard(false);
                 showGameRules();
                 addLog("机器人已就座并自动准备好，点「准备好了」开始");
@@ -1006,15 +1036,34 @@ public class LocalGameActivity extends Activity {
 
     private void pollTableOnce() {
         if (client == null || tableNo == null) return;
+        // 每 3 轮（约 6 秒）才探一次「我是否已被踢」：这是本功能唯一的开销，
+        // 不值得每 2 秒都多打一个请求。被踢后 watcher 行已被服务端删掉，
+        // 所以 ban>0 只可能来自「我正在被观战且刚被踢」这一种情况。
+        final boolean checkBan = (++watchPollCount % 3 == 0);
+        final String mode = isRoom ? "room" : (isPvp ? "pvp" : "pve");
+        final String idOrCode = isRoom ? roomCode : tableNo;
         async(new Runnable() {
             @Override
             public void run() {
                 final JSONObject table = isRoom ? client.fetchRoom(tableNo)
                     : (isPvp ? client.fetchPvpTable(tableNo)
                         : client.fetchPveTable(tableNo));
+                // 注意：查不到（网络抖动/解析失败）时 fetchMyBanSeconds 返回 0，
+                // 宁可漏踢一次也不要因为一次请求失败就把人误踢出房间。
+                int banSec = 0;
+                if (checkBan && (isPvp || isRoom) && idOrCode != null && !idOrCode.isEmpty()) {
+                    banSec = client.fetchMyBanSeconds(mode, idOrCode);
+                }
+                final int banFinal = banSec;
                 runOnUiThread(new Runnable() {
                     @Override
                     public void run() {
+                        // 被踢优先于桌态渲染：本桌玩家还在，renderWatcherState 会
+                        // 继续把界面当成正常观战刷下去，跟退回逻辑打架。
+                        if (banFinal > 0) {
+                            exitBecauseKicked(banFinal);
+                            return;
+                        }
                         renderWatcherState(table);
                     }
                 });
@@ -1246,6 +1295,8 @@ public class LocalGameActivity extends Activity {
         String name = playerName == null || playerName.isEmpty() ? "玩家" : playerName;
         if (btnNickname != null) btnNickname.setText(name);
         if (tvPlayerName != null) tvPlayerName.setText(name);
+        // 人机桌左侧恒为自己：昵称刷新后要保证资料卡仍能点开
+        if (!isPvp && !isRoom && client != null) tvPlayerNameId = client.getUserId();
     }
 
     private void sendChatMessage() {
@@ -1694,7 +1745,16 @@ public class LocalGameActivity extends Activity {
         showResultImage(iWon);
     }
 
-    // 拉取并展示当前桌的观众昵称（仅观众，不含玩家）
+    // 我能不能踢本桌观众：必须是我真的坐在 A/B 位上。
+    // mySide 每轮从服务端行重算（"a"/"b"/null），观众恒为 null -> 踢出按钮不显示。
+    // 人人桌与私密房走同一个 renderPvpState，两者都能正确拿到 mySide。
+    // 【不能用 isWatcher】那是进场时的 Intent extra，之后永不改写。
+    // 真正的权限仍在服务端 RPC 里再校验一次，这里只负责界面。
+    private boolean canKickWatchers() {
+        return (isPvp || isRoom) && mySide != null;
+    }
+
+    // 拉取并展示当前桌的观众资料列表（仅观众，不含玩家）
     private void showWatcherList() {
         if (client == null || tableNo == null) return;
         final String mode = isRoom ? "room" : (isPvp ? "pvp" : "pve");
@@ -1703,11 +1763,12 @@ public class LocalGameActivity extends Activity {
         async(new Runnable() {
             @Override
             public void run() {
-                final List<String> names = client.fetchWatcherNicknames(mode, idOrCode);
+                final List<SupabaseClient.WatcherInfo> list =
+                        client.fetchWatcherProfiles(mode, idOrCode);
                 runOnUiThread(new Runnable() {
                     @Override
                     public void run() {
-                        showWatcherListDialog(names);
+                        showWatcherListDialog(list);
                     }
                 });
             }
@@ -1716,30 +1777,17 @@ public class LocalGameActivity extends Activity {
 
     // 观众列表弹窗：白底黑字、圆角、宽=屏宽1/2；悬浮在游戏日志区域内，
     // 通过计算日志区在屏幕中的位置与高度权重来定位，绝不遮挡下方操作按钮。
-    private void showWatcherListDialog(List<String> names) {
-        if (names == null) names = new ArrayList<>();
+    // 每个观众一行、整行可点开资料（踢出按钮由资料窗按身份自行决定显不显示）。
+    private void showWatcherListDialog(List<SupabaseClient.WatcherInfo> list) {
+        if (list == null) list = new ArrayList<>();
         final int screenW = getResources().getDisplayMetrics().widthPixels;
         final int popupW = screenW / 2;
 
         TextView title = new TextView(this);
-        title.setText("观众列表（" + names.size() + " 人）");
+        title.setText("观众列表（" + list.size() + " 人）");
         title.setTextSize(16);
         title.setTextColor(Color.BLACK);
-        title.setPadding(dp(16), dp(12), dp(16), 0);
-
-        TextView body = new TextView(this);
-        StringBuilder sb = new StringBuilder();
-        if (names.isEmpty()) {
-            sb.append("暂无观众");
-        } else {
-            for (String n : names) {
-                sb.append("· ").append(n).append("\n");
-            }
-        }
-        body.setText(sb.toString().trim());
-        body.setTextSize(14);
-        body.setTextColor(Color.BLACK);
-        body.setPadding(dp(16), dp(8), dp(16), dp(12));
+        title.setPadding(dp(16), dp(12), dp(16), dp(6));
 
         LinearLayout content = new LinearLayout(this);
         content.setOrientation(LinearLayout.VERTICAL);
@@ -1748,7 +1796,25 @@ public class LocalGameActivity extends Activity {
         bg.setCornerRadius(dp(12));
         content.setBackground(bg);
         content.addView(title);
-        content.addView(body);
+
+        if (list.isEmpty()) {
+            TextView empty = new TextView(this);
+            empty.setText("暂无观众");
+            empty.setTextSize(14);
+            empty.setTextColor(Color.BLACK);
+            empty.setPadding(dp(16), dp(8), dp(16), dp(12));
+            content.addView(empty);
+        } else {
+            for (int i = 0; i < list.size(); i++) {
+                content.addView(buildWatcherRow(list.get(i)));
+            }
+            TextView hint = new TextView(this);
+            hint.setText(canKickWatchers() ? "· 点击观众查看资料，可踢出" : "· 点击观众查看资料");
+            hint.setTextSize(11);
+            hint.setTextColor(0xFF999999);
+            hint.setPadding(dp(16), dp(2), dp(16), dp(10));
+            content.addView(hint);
+        }
 
         ScrollView sv = new ScrollView(this);
         sv.addView(content);
@@ -1787,6 +1853,190 @@ public class LocalGameActivity extends Activity {
                     Gravity.TOP | Gravity.LEFT, popupW / 2, dp(80));
         }
     }
+
+    // 观众列表的一行：性别圆点 + 昵称，整行可点
+    private View buildWatcherRow(final SupabaseClient.WatcherInfo w) {
+        LinearLayout row = new LinearLayout(this);
+        row.setOrientation(LinearLayout.HORIZONTAL);
+        row.setGravity(Gravity.CENTER_VERTICAL);
+        row.setPadding(dp(16), dp(10), dp(16), dp(10));
+        GradientDrawable rb = new GradientDrawable();
+        rb.setColor(0xFFF2F2F2);
+        rb.setCornerRadius(dp(8));
+        row.setBackground(rb);
+        LinearLayout.LayoutParams rowLp = new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
+        rowLp.bottomMargin = dp(6);
+        row.setLayoutParams(rowLp);
+
+        View dot = new View(this);
+        GradientDrawable d = new GradientDrawable();
+        d.setShape(GradientDrawable.OVAL);
+        if ("female".equals(w.gender) || "女".equals(w.gender) || "f".equals(w.gender)) {
+            d.setColor(0xFFE36DA8);
+        } else if ("male".equals(w.gender) || "男".equals(w.gender) || "m".equals(w.gender)) {
+            d.setColor(0xFF3B7DD8);
+        } else {
+            d.setColor(0xFF9E9E9E);
+        }
+        dot.setBackground(d);
+        row.addView(dot, new LinearLayout.LayoutParams(dp(10), dp(10)));
+
+        TextView nick = new TextView(this);
+        nick.setText((w.nickname == null || w.nickname.isEmpty()) ? "无名" : w.nickname);
+        nick.setTextSize(14);
+        nick.setTextColor(Color.BLACK);
+        nick.setPadding(dp(8), 0, 0, 0);
+        row.addView(nick, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
+
+        row.setOnClickListener(new View.OnClickListener() {
+            @Override
+            public void onClick(View v) {
+                openWatcherInfo(w);
+            }
+        });
+        return row;
+    }
+
+    // 点某个观众：先关掉列表弹窗，再开资料大窗；随后异步补一次 getUserRank 拿排名。
+    // 列表是 PopupWindow、资料窗是挂在 content 根的 overlay，属于两套不同的 window，
+    // 叠在一起会互相干掉 —— 所以这里选择「关掉列表、返回时重开」而不是叠加。
+    private void openWatcherInfo(final SupabaseClient.WatcherInfo w) {
+        if (w == null) return;
+        if (watcherPopup != null && watcherPopup.isShowing()) watcherPopup.dismiss();
+        if (popupHandler != null) popupHandler.removeCallbacksAndMessages(null);
+
+        watcherInfoOpenId = w.userId;
+        showWatcherInfo(w);
+
+        if (client == null) return;
+        new Thread(new Runnable() {
+            @Override
+            public void run() {
+                final org.json.JSONObject rk = client.getUserRank(w.userId);
+                if (rk == null) return;
+                final int rank = rk.optInt("rank", 0);
+                final int score = rk.optInt("score", w.score);
+                final int wins = rk.optInt("wins", w.wins);
+                final int losses = rk.optInt("losses", w.losses);
+                final int games = rk.optInt("total_games", w.totalGames);
+                runOnUiThread(new Runnable() {
+                    @Override
+                    public void run() {
+                        // 用户可能已关窗、已切到别人、或正在退出，别把旧窗口拉回来
+                        if (isFinishing() || !w.userId.equals(watcherInfoOpenId)) return;
+                        w.rank = rank;
+                        w.score = score;
+                        w.wins = wins;
+                        w.losses = losses;
+                        w.totalGames = games;
+                        showWatcherInfo(w);
+                    }
+                });
+            }
+        }).start();
+    }
+
+    private void showWatcherInfo(final SupabaseClient.WatcherInfo w) {
+        WatcherInfoDialog.show(this, w, canKickWatchers(), new WatcherInfoDialog.Action() {
+            @Override
+            public void onBack() {
+                watcherInfoOpenId = null;
+                showWatcherList();   // 返回时重新拉一次列表
+            }
+            @Override
+            public void onKick() {
+                confirmKickWatcher(w);
+            }
+            @Override
+            public void onClosed() {
+                watcherInfoOpenId = null;
+            }
+        });
+    }
+
+    // 踢出前二次确认：不可逆，且会让对方一段时间内进不来
+    private void confirmKickWatcher(final SupabaseClient.WatcherInfo w) {
+        if (!canKickWatchers()) return;
+        final String nick = (w.nickname == null || w.nickname.isEmpty()) ? "该观众" : w.nickname;
+        AppDialog.confirm(this,
+            "踢出观众",
+            "确定将「" + nick + "」移出本桌观战吗？\n对方 " + WATCHER_BAN_MINUTES + " 分钟内无法再观战本桌。",
+            "踢出", "取消",
+            new AppDialog.OnClick() {
+                @Override
+                public void onClick(AppDialog dialog) {
+                    doKickWatcher(w, nick);
+                }
+            },
+            null).backCancelable().show();
+    }
+
+    private void doKickWatcher(final SupabaseClient.WatcherInfo w, final String nick) {
+        if (client == null || tableNo == null) return;
+        final boolean roomMode = isRoom;
+        final String idOrCode = isRoom ? roomCode : tableNo;
+        if (idOrCode == null || idOrCode.isEmpty()) return;
+        final String target = w.userId;
+
+        // 先关资料窗，踢完直接重开列表看结果（被踢的人已经从列表消失）
+        WatcherInfoDialog.dismiss();
+        watcherInfoOpenId = null;
+
+        async(new Runnable() {
+            @Override
+            public void run() {
+                final SupabaseClient.RpcResult r = roomMode
+                    ? client.roomKickWatcher(idOrCode, target, WATCHER_BAN_MINUTES)
+                    : client.pvpKickWatcher(idOrCode, target, WATCHER_BAN_MINUTES);
+                runOnUiThread(new Runnable() {
+                    @Override
+                    public void run() {
+                        if (isFinishing()) return;
+                        if (r != null && r.ok) {
+                            Toast.makeText(LocalGameActivity.this,
+                                "已踢出「" + nick + "」", Toast.LENGTH_SHORT).show();
+                            showWatcherList();
+                        } else {
+                            // 服务端异常码翻成人话，别把 NOT_YOUR_TABLE 之类直接甩给用户
+                            String msg = "踢出失败，请稍后再试";
+                            if (r != null && r.error != null) {
+                                if (r.error.contains("NOT_YOUR_TABLE")) {
+                                    msg = "只有本桌玩家可以踢出观众";
+                                } else if (r.error.contains("NOT_A_WATCHER")) {
+                                    msg = "对方已经不在观众列表里了";
+                                } else if (r.error.contains("TABLE_NOT_FOUND")
+                                        || r.error.contains("ROOM_NOT_FOUND")) {
+                                    msg = "本桌已不存在";
+                                }
+                            }
+                            Toast.makeText(LocalGameActivity.this, msg, Toast.LENGTH_SHORT).show();
+                        }
+                    }
+                });
+            }
+        });
+    }
+
+    // 观众被本桌玩家踢出：提示后退回上一级（PvP 大厅 / 私密房）。
+    // 【刻意不复用 exitBecauseTableClosed】那个对 isRoom 会 CLEAR_TASK 回初始页，
+    // 适用于「房间被清空」；被踢只是走了一个人、房间还在，抹掉私密房页是错的。
+    private void exitBecauseKicked(int banSeconds) {
+        if (leavingTable) return;
+        leavingTable = true;
+        stopCountdown();
+        watchHandler.removeCallbacksAndMessages(null);
+        stopChat();
+        if (seatManager != null) seatManager.stopHeartbeat();
+        WatcherInfoDialog.dismiss();
+        watcherInfoOpenId = null;
+        if (watcherPopup != null && watcherPopup.isShowing()) watcherPopup.dismiss();
+        String extra = banSeconds >= 60
+                ? "（" + (banSeconds / 60) + " 分钟内无法再观战本桌）" : "";
+        Toast.makeText(this, "你已被本桌玩家移出观战" + extra, Toast.LENGTH_LONG).show();
+        finishOrHome();   // = finish()，退回发起页：PvP 大厅 / 私密房
+    }
+
 
     // ===== 聊天（玩家+观众，按 chatScope 隔离，1.5s 轮询）=====
     // 生命周期与桌绑定：桌内有玩家 -> openChat；桌空（末位玩家离席）-> closeChat。
@@ -2564,6 +2814,10 @@ public class LocalGameActivity extends Activity {
         SoundSettingsDialog.show(this, new Runnable() {
             @Override
             public void run() {
+                // 开关把新值写进了 SharedPreferences，但本类的 soundEnabled 字段是
+                // onCreate 时读一次的缓存。这里必须重新读回来，否则 playDida/playWin
+                // 的判断和 🔊 图标都还是旧值 —— 表现就是「开关要退出重进才生效」。
+                soundEnabled = sharedPreferences.getBoolean("soundEnabled", true);
                 setupGameBoard(true);
             }
         });
@@ -2659,6 +2913,11 @@ public class LocalGameActivity extends Activity {
     @Override
     protected void onResume() {
         super.onResume();
+        // 可能是在别的页面（菜单/房间）改了音效开关，回前台时同步一次缓存，
+        // 免得本局继续用旧的 soundEnabled。
+        if (sharedPreferences != null) {
+            soundEnabled = sharedPreferences.getBoolean("soundEnabled", true);
+        }
         if (seatManager != null) {
             seatManager.resumeHeartbeat();
         }
@@ -2674,6 +2933,7 @@ public class LocalGameActivity extends Activity {
         if (rowsContainer != null) rowsContainer.removeCallbacks(null);
         if (popupHandler != null) popupHandler.removeCallbacksAndMessages(null);
         if (watcherPopup != null && watcherPopup.isShowing()) watcherPopup.dismiss();
+        WatcherInfoDialog.dismiss();   // 观众资料大窗
         stopChat();
         if (seatManager != null) {
             seatManager.stopHeartbeat();

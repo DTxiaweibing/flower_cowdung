@@ -488,22 +488,37 @@ public class SupabaseClient {
         return rpc("pvp_report_state", args).ok;
     }
 
-    // 取某桌「仅观众」的昵称列表（绝不返回玩家）。
+    // 单个观众的资料（列表行 + 详情弹窗共用）。
+    // userId 是踢人操作的唯一依据：没有它就无法知道「点的是哪一行」。
+    public static class WatcherInfo {
+        public String userId = "";
+        public String nickname = "";
+        public String gender = "";
+        public int score;
+        public int wins;
+        public int losses;
+        public int totalGames;
+        public int rank;   // 0 = 暂无排名
+    }
+
+    // 取某桌「仅观众」的完整资料列表（绝不返回玩家）。
     //   mode="pvp" -> pvp_watchers(table_id)
     //   mode="pve" -> pve_watchers(table_id)
-    //   mode="room"-> room_members(room_code, role='watcher')
-    // watchers 表/角色过滤本身只含观众，玩家不会进入结果。
+    //   mode="room"-> private_room_watchers(room_code)
+    // watchers 表本身只含观众，玩家不会进入结果。
     // 失败（无网/未登录/RLS）返回空列表。
-    public List<String> fetchWatcherNicknames(String mode, String idOrCode) {
-        List<String> result = new ArrayList<>();
+    public List<WatcherInfo> fetchWatcherProfiles(String mode, String idOrCode) {
+        List<WatcherInfo> result = new ArrayList<>();
         if (idOrCode == null || idOrCode.isEmpty()) return result;
         if (!ensureFreshToken() || accessToken == null) return result;
         try {
             String table;
             String filter;
             if ("room".equals(mode)) {
-                table = "room_members";
-                filter = "room_code=eq." + idOrCode + "&role=eq.watcher";
+                // 私房观战关系在 private_room_watchers（room_watch/room_unwatch 写的表）。
+                // 早期这里错读老表 room_members，导致私房的观众列表和真实观众对不上。
+                table = "private_room_watchers";
+                filter = "room_code=eq." + idOrCode;
             } else if ("pve".equals(mode)) {
                 table = "pve_watchers";
                 filter = "table_id=eq." + idOrCode;
@@ -528,18 +543,87 @@ public class SupabaseClient {
                 inIds.append(ids.get(i));
             }
             JSONArray profs = getArray(PROJECT_URL + "/rest/v1/profiles"
-                    + "?select=nickname&id=in.(" + inIds + ")");
-            if (profs != null) {
-                for (int i = 0; i < profs.length(); i++) {
-                    JSONObject o = profs.optJSONObject(i);
-                    if (o == null) continue;
-                    String nick = o.optString("nickname", "").trim();
-                    if (!nick.isEmpty()) result.add(nick);
-                }
+                    + "?select=id,nickname,gender,score,wins,losses,total_games"
+                    + "&id=in.(" + inIds + ")");
+            if (profs == null) return result;
+            // PostgREST 的 in.() 返回顺序不保证，必须按 id 关联，不能按下标对齐
+            java.util.Map<String, WatcherInfo> byId = new java.util.HashMap<>();
+            for (int i = 0; i < profs.length(); i++) {
+                JSONObject o = profs.optJSONObject(i);
+                if (o == null) continue;
+                String pid = o.optString("id", "");
+                if (pid.isEmpty()) continue;
+                WatcherInfo w = new WatcherInfo();
+                w.userId = pid;
+                w.nickname = o.optString("nickname", "").trim();
+                w.gender = o.optString("gender", "");
+                w.score = o.optInt("score", 0);
+                w.wins = o.optInt("wins", 0);
+                w.losses = o.optInt("losses", 0);
+                w.totalGames = o.optInt("total_games", 0);
+                byId.put(pid, w);
+            }
+            // 保持 watchers 表的顺序输出
+            for (String uid : ids) {
+                WatcherInfo w = byId.get(uid);
+                if (w != null) result.add(w);
             }
         } catch (Exception ignore) {
         }
         return result;
+    }
+
+    // 观众被踢 + 临时禁入。仅本桌 A/B 玩家可调用（服务端鉴权，UI 隐藏只是体验）。
+    // banMinutes = 0 表示只踢出不禁入。
+    // 返回 RpcResult：ok=false 时 error 里带 NOT_YOUR_TABLE / NOT_A_WATCHER 等异常码。
+    public RpcResult pvpKickWatcher(String tid, String targetUid, int banMinutes) {
+        JSONObject args = new JSONObject();
+        try {
+            args.put("tid", tid);
+            args.put("target", targetUid);
+            args.put("ban_minutes", banMinutes);
+        } catch (Exception ignore) { }
+        return rpc("pvp_kick_watcher", args);
+    }
+
+    public RpcResult roomKickWatcher(String code, String targetUid, int banMinutes) {
+        JSONObject args = new JSONObject();
+        try {
+            args.put("code", code);
+            args.put("target", targetUid);
+            args.put("ban_minutes", banMinutes);
+        } catch (Exception ignore) { }
+        return rpc("room_kick_watcher", args);
+    }
+
+    // 观众自查：我在本桌还剩多少秒禁入。
+    //   > 0 = 被踢了且仍在禁入期 -> 客户端应提示并退回大厅
+    //   0   = 没有禁入（含网络失败，无法区分时按「没被踢」处理，避免误退）
+    public int fetchMyBanSeconds(String mode, String idOrCode) {
+        if (idOrCode == null || idOrCode.isEmpty()) return 0;
+        RpcResult r;
+        if ("room".equals(mode)) {
+            r = rpc("room_my_ban_seconds", arg("code", idOrCode));
+        } else {
+            r = rpc("pvp_my_ban_seconds", arg("tid", idOrCode));
+        }
+        if (r == null || !r.ok) return 0;
+        int seconds = 0;
+        try {
+            if (r.json != null) {
+                seconds = r.json.optInt("room_my_ban_seconds",
+                        r.json.optInt("pvp_my_ban_seconds", 0));
+            }
+            if (seconds == 0 && r.rawText != null && !r.rawText.trim().isEmpty()) {
+                String t = r.rawText.trim();
+                if (t.startsWith("[")) {
+                    seconds = new JSONArray(t).optInt(0, 0);
+                } else {
+                    seconds = Integer.parseInt(t.replace("\"", ""));
+                }
+            }
+        } catch (Exception ignore) { }
+        return Math.max(0, seconds);
     }
 
     private JSONArray getArray(String urlStr) {
