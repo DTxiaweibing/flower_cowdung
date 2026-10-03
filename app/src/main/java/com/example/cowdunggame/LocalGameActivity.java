@@ -1254,10 +1254,10 @@ public class LocalGameActivity extends Activity {
         addLog("系统", message);
     }
 
-    // 「N朵鲜花」里的鲜花换成 N 个 🌸，例：5朵🌸🌸🌸🌸🌸
+    // 「N朵鲜花」里的鲜花换成 N 个 🌹，例：5朵🌹🌹🌹🌹🌹
     private static String flowerEmojis(int count) {
         StringBuilder sb = new StringBuilder();
-        for (int i = 0; i < count; i++) sb.append("🌸");
+        for (int i = 0; i < count; i++) sb.append("🌹");
         return sb.toString();
     }
 
