@@ -378,6 +378,9 @@ public class MenuActivity extends Activity {
             row.setTextColor(Color.WHITE);
             row.setSingleLine(true);
             row.setPadding(dp(18), dp(12), dp(18), dp(12));
+            // 每行同宽，抽屉整体才好居中。
+            row.setLayoutParams(new LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT));
             if (selected) row.setBackgroundColor(0x33FFD700);
             row.setOnClickListener(new View.OnClickListener() {
                 @Override
@@ -389,7 +392,11 @@ public class MenuActivity extends Activity {
             list.addView(row);
         }
 
-        popup.showAsDropDown(anchor, 0, dp(4));
+        // 先量出抽屉实际宽度，再相对标题水平居中；垂直方向贴在标题正下方。
+        list.measure(View.MeasureSpec.makeMeasureSpec(0, View.MeasureSpec.UNSPECIFIED),
+            View.MeasureSpec.makeMeasureSpec(0, View.MeasureSpec.UNSPECIFIED));
+        int xoff = (anchor.getWidth() - list.getMeasuredWidth()) / 2;
+        popup.showAsDropDown(anchor, xoff, dp(4));
     }
 
     private GradientDrawable popupBg() {
