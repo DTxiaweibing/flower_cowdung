@@ -24,6 +24,7 @@
 | `fix_kick_watcher.sql` | 观众「查看资料 / 踢出 / 临时禁入」+ 收紧 watchers 表 DELETE 策略。 |
 | `fix_watcher_count_recursion.sql` | 修复「有观众时玩家无法离座、观众永不被踢」：归零分支置 `watcher_count=0` + `watcher_inc/dec` 在连带触发时早退。 |
 | `fix_ban_guards.sql` | 线上独有的 `*_ban_guard` 触发器/函数 + 三表 `banned_ids` 列，按线上原文落库（文件头有现状说明）。 |
+| `fix_drop_legacy_kick.sql` | **清理**旧版踢人机制：`kick_watcher` / `reset_watcher_kick` + 三表 `kicked` 列 + 三条 `*_no_kicked_rejoin` 策略，已被 `fix_kick_watcher.sql` 的 bans 表机制取代。已对线上执行。 |
 
 > ⚠️ 重跑 `pvp_tables.sql` / `private_rooms.sql` / `pve_tables.sql` / `run_all_pve.sql` 会覆盖其中的 `*_watcher_inc/dec()`，需再跑一次 `fix_watcher_count_recursion.sql`。
 

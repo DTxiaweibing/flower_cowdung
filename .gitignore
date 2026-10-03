@@ -13,3 +13,6 @@ app/release/
 
 # supabase 本地草稿（不提交）
 supabase/drafts/
+
+# 数据库备份产物（含账号数据，绝不提交）
+db_backup/
