@@ -1075,26 +1075,18 @@ public class LocalGameActivity extends Activity {
     private void renderWatcherState(JSONObject table) {
         if (table == null) return;
 
-        if (isPvp) {
+        // 人人桌与私密房都是「两个真人玩家」：观战渲染完全一致（A 左 / B 右）。
+        // 原来这里只判 isPvp，私密房漏进来走了下面的人机分支，
+        // 于是房内观众看到的是「玩家 / 电脑」而不是房里两个真人的画面。
+        if (isPvp || isRoom) {
             renderPvpWatcherState(table);
             return;
         }
 
-        // 私密房间与人机走同一套「玩家归零即结束」判定：
-        // 服务端已在座位归零时清空本桌全部观战关系，这里负责把观众退回大厅
-        if (isRoom) {
-            JSONObject a = table.optJSONObject("player_a");
-            JSONObject b = table.optJSONObject("player_b");
-            if (a == null && b == null) {
-                exitBecauseTableClosed("房间内玩家已全部离开，观战结束");
-                return;
-            }
-        } else {
-            // 人机桌：player_id 为空即无人
-            if (table.isNull("player_id") || table.optString("player_id", "").isEmpty()) {
-                exitBecauseTableClosed("本桌玩家已离开，观战结束");
-                return;
-            }
+        // 人机观战：player_id 为空即无人（服务端已在座位归零时清空本桌观战关系）
+        if (table.isNull("player_id") || table.optString("player_id", "").isEmpty()) {
+            exitBecauseTableClosed("本桌玩家已离开，观战结束");
+            return;
         }
 
         // 本桌有玩家 -> 聊天开；玩家全走 -> 聊天关（由 closeChat 负责隐藏与停轮询）
