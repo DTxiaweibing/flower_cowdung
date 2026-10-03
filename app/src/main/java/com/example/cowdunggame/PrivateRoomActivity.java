@@ -15,6 +15,7 @@ import android.view.Gravity;
 import android.view.View;
 import android.widget.Button;
 import android.widget.FrameLayout;
+import android.widget.ImageView;
 import android.widget.LinearLayout;
 import android.widget.TextView;
 import android.widget.Toast;
@@ -60,10 +61,13 @@ public class PrivateRoomActivity extends Activity {
 
         FrameLayout root = new FrameLayout(this);
 
-        FloorView floor = new FloorView(this);
-        floor.setLayoutParams(new FrameLayout.LayoutParams(
+        // 背景：用图片铺满全屏（替换原代码绘制的地板 FloorView）。
+        ImageView bg = new ImageView(this);
+        bg.setImageResource(R.drawable.background);
+        bg.setScaleType(ImageView.ScaleType.CENTER_CROP);
+        bg.setLayoutParams(new FrameLayout.LayoutParams(
             FrameLayout.LayoutParams.MATCH_PARENT, FrameLayout.LayoutParams.MATCH_PARENT));
-        root.addView(floor);
+        root.addView(bg);
 
         // 标题：房间号
         tvTitle = new TextView(this);

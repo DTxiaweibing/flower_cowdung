@@ -14,6 +14,7 @@ import android.view.View;
 import android.view.ViewGroup;
 import android.widget.Button;
 import android.widget.FrameLayout;
+import android.widget.ImageView;
 import android.widget.LinearLayout;
 import android.widget.TextView;
 import android.widget.Toast;
@@ -36,10 +37,13 @@ public class MenuActivity extends Activity {
 
         FrameLayout root = new FrameLayout(this);
 
-        FloorView floor = new FloorView(this);
-        floor.setLayoutParams(new FrameLayout.LayoutParams(
+        // 背景：用图片铺满全屏（替换原代码绘制的地板 FloorView）。
+        ImageView bg = new ImageView(this);
+        bg.setImageResource(R.drawable.background);
+        bg.setScaleType(ImageView.ScaleType.CENTER_CROP);
+        bg.setLayoutParams(new FrameLayout.LayoutParams(
             FrameLayout.LayoutParams.MATCH_PARENT, FrameLayout.LayoutParams.MATCH_PARENT));
-        root.addView(floor);
+        root.addView(bg);
 
         // 初始场景：与私密房间同款大桌卡，复用 GameTableView。
         // 游戏中的桌面（table_playing），左座男、右座女、上下观众满员，纯装饰不可点。
@@ -165,10 +169,10 @@ public class MenuActivity extends Activity {
         // 系统给导航栏画的那层半透明遮罩直接盖在按钮上，看着就像「导航栏有颜色」。
         //
         // 这里只把导航栏高度让给 bottomMenu，不给 root 加 padding：root 一旦
-        // 加 padding，里面铺满全屏的 FloorView 会被裁到 padding 边界以内，
+        // 加 padding，里面铺满全屏的背景图会被裁到 padding 边界以内，
         // 让出的那条就会露出主题的浅色 window 背景 —— 那反而更像「导航栏有颜色」。
-        // 只叠 bottomMargin 的话 FloorView 仍然画到屏幕最底边，导航栏那条露出来
-        // 的是地板自己的深色，和 LocalGameActivity 的处理方式一致。
+        // 只叠 bottomMargin 的话背景图仍然画到屏幕最底边，导航栏那条露出来
+        // 的是背景图自己的深色，和 LocalGameActivity 的处理方式一致。
         ViewCompat.setOnApplyWindowInsetsListener(root, new OnApplyWindowInsetsListener() {
             @Override
             public WindowInsetsCompat onApplyWindowInsets(View v, WindowInsetsCompat insets) {
