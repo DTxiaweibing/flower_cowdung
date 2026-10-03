@@ -23,8 +23,7 @@
 | `fix_round_lifecycle.sql` | 一局生命周期权威版：回合超时判负、单人参战 60s 回收、末位离席清场（清聊天/棋谱）、cron 兜底。**最后会被它覆盖建库脚本里的同名函数。** |
 | `fix_kick_watcher.sql` | 观众「查看资料 / 踢出 / 临时禁入」+ 收紧 watchers 表 DELETE 策略。 |
 | `fix_watcher_count_recursion.sql` | 修复「有观众时玩家无法离座、观众永不被踢」：归零分支置 `watcher_count=0` + `watcher_inc/dec` 在连带触发时早退。 |
-
-> 线上库还存在仓库里没有的整套 `*_ban_guard` 触发器/函数（`banned_ids` 机制，来源不明），疑似早期废弃实现，暂不纳入；确认要保留时再按线上原文落成 `fix_ban_guards.sql`。
+| `fix_ban_guards.sql` | 线上独有的 `*_ban_guard` 触发器/函数 + 三表 `banned_ids` 列，按线上原文落库（文件头有现状说明）。 |
 
 > ⚠️ 重跑 `pvp_tables.sql` / `private_rooms.sql` / `pve_tables.sql` / `run_all_pve.sql` 会覆盖其中的 `*_watcher_inc/dec()`，需再跑一次 `fix_watcher_count_recursion.sql`。
 
