@@ -7,6 +7,7 @@ import android.app.Activity;
 import android.content.Context;
 import android.content.Intent;
 import android.graphics.Color;
+import android.graphics.drawable.ColorDrawable;
 import android.graphics.drawable.GradientDrawable;
 import android.os.Bundle;
 import android.view.Gravity;
@@ -16,6 +17,7 @@ import android.widget.Button;
 import android.widget.FrameLayout;
 import android.widget.ImageView;
 import android.widget.LinearLayout;
+import android.widget.PopupWindow;
 import android.widget.TextView;
 import android.widget.Toast;
 import androidx.core.graphics.Insets;
@@ -68,6 +70,14 @@ public class MenuActivity extends Activity {
             FrameLayout.LayoutParams.MATCH_PARENT, (int) (screenH * 0.08f));
         titleParams.topMargin = (int) (screenH * 0.05f);
         title.setLayoutParams(titleParams);
+        title.setClickable(true);
+        // 点击标题弹出鲜花下拉抽屉：每项「名称 + emoji」，当前选中的行尾打勾。
+        title.setOnClickListener(new View.OnClickListener() {
+            @Override
+            public void onClick(View v) {
+                showFlowerPicker(v);
+            }
+        });
         root.addView(title);
 
         // 声音设置入口（右上角）：弹出"音效 / 音乐"两个独立开关
@@ -339,6 +349,56 @@ public class MenuActivity extends Activity {
                 }
             },
             null).show();
+    }
+
+    // 点击标题弹出的鲜花选择抽屉（PopupWindow 锚在标题下方）。
+    // 每行「名称 + emoji」，当前选中的行尾加 ✓ 并高亮；点选即存并收起。
+    private void showFlowerPicker(View anchor) {
+        final int current = FlowerTheme.getIndex(this);
+
+        LinearLayout list = new LinearLayout(this);
+        list.setOrientation(LinearLayout.VERTICAL);
+        list.setBackground(popupBg());
+        int pad = dp(6);
+        list.setPadding(pad, pad, pad, pad);
+
+        final PopupWindow popup = new PopupWindow(list,
+            ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT, true);
+        popup.setOutsideTouchable(true);
+        popup.setFocusable(true);
+        popup.setBackgroundDrawable(new ColorDrawable(Color.TRANSPARENT));
+        popup.setElevation(dp(8));
+
+        for (int i = 0; i < FlowerTheme.NAMES.length; i++) {
+            final int index = i;
+            boolean selected = (i == current);
+            TextView row = new TextView(this);
+            row.setText(FlowerTheme.NAMES[i] + "  " + FlowerTheme.EMOJIS[i] + (selected ? "  ✓" : ""));
+            row.setTextSize(18);
+            row.setTextColor(Color.WHITE);
+            row.setSingleLine(true);
+            row.setPadding(dp(18), dp(12), dp(18), dp(12));
+            if (selected) row.setBackgroundColor(0x33FFD700);
+            row.setOnClickListener(new View.OnClickListener() {
+                @Override
+                public void onClick(View v) {
+                    FlowerTheme.setIndex(MenuActivity.this, index);
+                    popup.dismiss();
+                }
+            });
+            list.addView(row);
+        }
+
+        popup.showAsDropDown(anchor, 0, dp(4));
+    }
+
+    private GradientDrawable popupBg() {
+        GradientDrawable gd = new GradientDrawable();
+        gd.setShape(GradientDrawable.RECTANGLE);
+        gd.setCornerRadius(dp(12));
+        gd.setColor(0xF0202020);
+        gd.setStroke(1, Color.parseColor("#88FFD700"));
+        return gd;
     }
 
     private GradientDrawable btnBg() {

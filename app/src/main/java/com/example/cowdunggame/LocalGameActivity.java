@@ -63,6 +63,9 @@ public class LocalGameActivity extends Activity {
 
     private SharedPreferences sharedPreferences;
     private static final String PREFS_NAME = "CowDungPrefs";
+    // 当前鲜花主题（主页下拉里选的），棋盘与日志共用；onCreate 读一次即可
+    // （主页与对局是不同 Activity，不会并发修改）。
+    private String flowerEmoji = "🌹";
     private String playerName;
     private String playerGender = "male";
     private EditText etMessageInput;
@@ -213,6 +216,7 @@ public class LocalGameActivity extends Activity {
         super.onCreate(savedInstanceState);
 
         sharedPreferences = getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE);
+        flowerEmoji = FlowerTheme.getEmoji(this);
         playerName = sharedPreferences.getString("PlayerName", "");
         playerGender = sharedPreferences.getString("PlayerGender", "male");
         soundEnabled = sharedPreferences.getBoolean("soundEnabled", true);
@@ -1254,10 +1258,10 @@ public class LocalGameActivity extends Activity {
         addLog("系统", message);
     }
 
-    // 「N朵鲜花」里的鲜花换成 N 个 🌹，例：5朵🌹🌹🌹🌹🌹
-    private static String flowerEmojis(int count) {
+    // 「N朵鲜花」里的鲜花取当前主题花（与棋盘一致），例：5朵🌹🌹🌹🌹🌹
+    private String flowerEmojis(int count) {
         StringBuilder sb = new StringBuilder();
-        for (int i = 0; i < count; i++) sb.append("🌹");
+        for (int i = 0; i < count; i++) sb.append(flowerEmoji);
         return sb.toString();
     }
 
@@ -2673,7 +2677,7 @@ public class LocalGameActivity extends Activity {
                             remainingFlowers[i] = 1;
                         }
                     } else {
-                        item.setText("🌹");
+                        item.setText(flowerEmoji);
                         item.setTextColor(Color.RED);
                         if (slot < selectedFlowers[i].length && selectedFlowers[i][slot]) {
                             item.setAlpha(0.5f);
