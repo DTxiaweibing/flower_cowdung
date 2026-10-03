@@ -196,7 +196,7 @@ public class LocalGameActivity extends Activity {
     // turn_secs_left 返回（60 秒，见 fix_round_lifecycle.sql 的 pvp_turn_seconds），
     // 这里只在拉取失败时兜底显示。
     private static final int PLAYER_TURN_SECONDS = 180;
-    private static final int COMPUTER_THINK_SECONDS = 5;
+    private static final int COMPUTER_THINK_SECONDS = 2;
 
     // 人人桌/私密房间在 turn_secs_left 还没到的那几拍，先拿这个值把数字走起来。
     // 刻意和服务端 pvp_turn_seconds() 的 60 对齐：真值补回来时顶多差一两秒，
@@ -849,6 +849,10 @@ public class LocalGameActivity extends Activity {
                 // 否则只在轮到自己时那格有数字，另一格全程空白 ——
                 // 先入座和后入座看到的就是两套不同画面。
                 startCountdown(isPlayerTurn, serverSecsLeftOrDefault());
+                // startCountdown -> stopCountdown 会把两侧手指一起灭掉（那是给
+                // 人机用的表现）。人人/房间这里立刻按当前 turn 重新点亮，否则换
+                // 回合那一刻手指会消失，要等下一拍 2s 轮询才恢复。
+                updateTurnFinger(gsStatus, turn);
             } else {
                 // 同步对方落子后的棋盘 & 回合
                 String turn = gs.optString("turn", "");
@@ -891,6 +895,9 @@ public class LocalGameActivity extends Activity {
                     // isPlayerTurn 翻转后传给 startCountdown，就自动把两侧
                     // 位置对调，A/B 两个玩家看到的画面因此完全对称。
                     startCountdown(isPlayerTurn, serverSecsLeftOrDefault());
+                    // 同上：把被 stopCountdown 灭掉的手指按新 turn 补回来，
+                    // 保证手指始终跟随「轮到谁」而不是跟随倒计时重置的时刻。
+                    updateTurnFinger(gsStatus, turn);
                 }
             }
         } else {
