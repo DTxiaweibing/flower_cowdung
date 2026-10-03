@@ -8,6 +8,8 @@ local.properties
 .externalNativeBuild
 .cxx
 
-# ¹¹½¨²úÎï£¨APK / »ùÏß profile / ÔªÊı¾İ£©²»Èë¿â
+# æœ¬åœ°æ„å»ºäº§ç‰©ï¼ˆAPK / release profile / å…ƒæ•°æ®ï¼‰ï¼Œä¸è·Ÿè¸ª
 app/release/
 
+# supabase æœ¬åœ°è‰ç¨¿ï¼ˆä¸æäº¤ï¼‰
+supabase/drafts/
