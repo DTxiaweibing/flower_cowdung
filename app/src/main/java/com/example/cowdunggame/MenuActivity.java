@@ -358,7 +358,7 @@ public class MenuActivity extends Activity {
 
         LinearLayout list = new LinearLayout(this);
         list.setOrientation(LinearLayout.VERTICAL);
-        list.setBackground(popupBg());
+        list.setBackground(btnBg());
         int pad = dp(6);
         list.setPadding(pad, pad, pad, pad);
 
@@ -397,15 +397,6 @@ public class MenuActivity extends Activity {
             View.MeasureSpec.makeMeasureSpec(0, View.MeasureSpec.UNSPECIFIED));
         int xoff = (anchor.getWidth() - list.getMeasuredWidth()) / 2;
         popup.showAsDropDown(anchor, xoff, dp(4));
-    }
-
-    private GradientDrawable popupBg() {
-        GradientDrawable gd = new GradientDrawable();
-        gd.setShape(GradientDrawable.RECTANGLE);
-        gd.setCornerRadius(dp(12));
-        gd.setColor(0xF0202020);
-        gd.setStroke(1, Color.parseColor("#88FFD700"));
-        return gd;
     }
 
     private GradientDrawable btnBg() {
