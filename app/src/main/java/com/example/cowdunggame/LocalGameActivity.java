@@ -956,7 +956,7 @@ public class LocalGameActivity extends Activity {
                     int count = m.optInt("count", 0);
                     sb.append("a".equals(side) ? aName : bName)
                       .append("拿走了第").append(row + 1)
-                      .append("排的").append(count).append("朵鲜花\n");
+                      .append("排的").append(count).append("朵").append(flowerEmojis(count)).append("\n");
                     // 每落一手就播报下一手是谁，和人机日志「谁走完→提示轮到谁」同节奏。
                     // 以前只在最后补一句总的回合提示，中间过程看不到换手，
                     // 两边就都只显得出先入座那人的记录。
@@ -1210,7 +1210,7 @@ public class LocalGameActivity extends Activity {
                     int row = m.optInt("row", -1);
                     int count = m.optInt("count", 0);
                     sb.append(side.equals("computer") ? "电脑" : watcherPlayerName)
-                      .append("拿走了第").append(row + 1).append("排的").append(count).append("朵鲜花\n");
+                      .append("拿走了第").append(row + 1).append("排的").append(count).append("朵").append(flowerEmojis(count)).append("\n");
                 }
             }
             String winner = gs.optString("winner", "");
@@ -1254,11 +1254,18 @@ public class LocalGameActivity extends Activity {
         addLog("系统", message);
     }
 
+    // 「N朵鲜花」里的鲜花换成 N 个 🌸，例：5朵🌸🌸🌸🌸🌸
+    private static String flowerEmojis(int count) {
+        StringBuilder sb = new StringBuilder();
+        for (int i = 0; i < count; i++) sb.append("🌸");
+        return sb.toString();
+    }
+
     // PvP 落子日志：统一用昵称（与观战重放一致，玩家/观众看到同一套）
     private void logPvpMove(String who, int row, int count) {
         if (tvGameLog == null) return;
         tvGameLog.append(who + "拿走了第" + (row + 1)
-            + "排的" + count + "朵鲜花\n");
+            + "排的" + count + "朵" + flowerEmojis(count) + "\n");
         if (scrollView != null) {
             scrollView.post(new Runnable() {
                 @Override
@@ -1416,7 +1423,7 @@ public class LocalGameActivity extends Activity {
             // 落子日志统一用昵称（与观战重放一致，玩家/观众同一套）
             logPvpMove(pvpMyName(), selectedRow, selectedCount);
         } else {
-            addLog(getPlayerName(), "拿走了第" + (selectedRow + 1) + "排的" + selectedCount + "朵鲜花");
+            addLog(getPlayerName(), "拿走了第" + (selectedRow + 1) + "排的" + selectedCount + "朵" + flowerEmojis(selectedCount));
         }
         if (isPvp || isRoom) {
             // 上报前先以服务端棋谱为准再叠加我这步。moveList 只装得下「我自己走过的那几步」，
@@ -1511,7 +1518,7 @@ public class LocalGameActivity extends Activity {
         int row = move.row;
         int count = move.count;
         playSend(); // 电脑拿花也播放「拿走」音效，与玩家拿花一致
-        addLog("电脑", "拿走了第" + (row + 1) + "排的" + count + "朵鲜花");
+        addLog("电脑", "拿走了第" + (row + 1) + "排的" + count + "朵" + flowerEmojis(count));
         appendMove("computer", row, count);
         remainingFlowers[row] -= count;
 
