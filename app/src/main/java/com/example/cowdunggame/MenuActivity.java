@@ -7,6 +7,7 @@ import android.app.Activity;
 import android.content.Context;
 import android.content.Intent;
 import android.graphics.Color;
+import android.graphics.Rect;
 import android.graphics.drawable.ColorDrawable;
 import android.graphics.drawable.GradientDrawable;
 import android.os.Bundle;
@@ -18,6 +19,7 @@ import android.widget.FrameLayout;
 import android.widget.ImageView;
 import android.widget.LinearLayout;
 import android.widget.PopupWindow;
+import android.widget.ScrollView;
 import android.widget.TextView;
 import android.widget.Toast;
 import androidx.core.graphics.Insets;
@@ -358,11 +360,16 @@ public class MenuActivity extends Activity {
 
         LinearLayout list = new LinearLayout(this);
         list.setOrientation(LinearLayout.VERTICAL);
-        list.setBackground(btnBg());
         int pad = dp(6);
         list.setPadding(pad, pad, pad, pad);
 
-        final PopupWindow popup = new PopupWindow(list,
+        // 外层套 ScrollView：分屏/横屏屏幕变矮、抽屉放不下时可上下滚动。
+        // 圆角背景放 ScrollView 上，滚动时圆角固定在边框、不会随内容滚走。
+        ScrollView scroll = new ScrollView(this);
+        scroll.setBackground(btnBg());
+        scroll.addView(list);
+
+        final PopupWindow popup = new PopupWindow(scroll,
             ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT, true);
         popup.setOutsideTouchable(true);
         popup.setFocusable(true);
@@ -392,10 +399,22 @@ public class MenuActivity extends Activity {
             list.addView(row);
         }
 
-        // 先量出抽屉实际宽度，再相对标题水平居中；垂直方向贴在标题正下方。
+        // 量出抽屉内容尺寸：宽度用于水平居中，高度用于判断是否需要限高滚动。
         list.measure(View.MeasureSpec.makeMeasureSpec(0, View.MeasureSpec.UNSPECIFIED),
             View.MeasureSpec.makeMeasureSpec(0, View.MeasureSpec.UNSPECIFIED));
         int xoff = (anchor.getWidth() - list.getMeasuredWidth()) / 2;
+
+        // 标题下方剩余可视高度（用可见显示区，兼容分屏/横屏/状态栏）；
+        // 内容超过就限高，交给外层 ScrollView 上下滚动。
+        Rect frame = new Rect();
+        anchor.getWindowVisibleDisplayFrame(frame);
+        int[] loc = new int[2];
+        anchor.getLocationOnScreen(loc);
+        int below = frame.bottom - (loc[1] + anchor.getHeight()) - dp(12);
+        if (below > 0 && list.getMeasuredHeight() > below) {
+            popup.setHeight(below);
+        }
+
         popup.showAsDropDown(anchor, xoff, dp(4));
     }
 
