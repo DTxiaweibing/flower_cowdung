@@ -1,0 +1,9 @@
+{
+  // Cloudflare Worker 配置 —— Supabase 反向代理
+  // 部署：npx wrangler deploy（在 supabase/cloudflare-proxy 目录下执行）
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "cowdung-proxy",
+  "main": "worker.js",
+  "compatibility_date": "2026-10-05",
+  "workers_dev": true
+}

@@ -46,10 +46,10 @@ export default {
     for (const [k, v] of request.headers) {
       if (!DROP_REQUEST.includes(k.toLowerCase())) headers.set(k, v);
     }
-    headers.set('apikey', ANON_KEY);
-    if (!headers.has('Authorization')) {
-      headers.set('Authorization', 'Bearer ' + ANON_KEY);
-    }
+headers.set('apikey', ANON_KEY);
+    // 刻意不注入 Authorization。Supabase 的发布密钥（sb_publishable_…）不是 JWT，
+    // 塞进 Authorization 头会被 PostgREST 判成 PGRST301（Expected 3 parts in JWT）。
+    // 未登录请求只靠 apikey 头即可落到 anon 角色；已登录的请求由 App 自带真实 JWT。
 
     const init = { method: request.method, headers, redirect: 'manual' };
     if (request.method !== 'GET' && request.method !== 'HEAD') {

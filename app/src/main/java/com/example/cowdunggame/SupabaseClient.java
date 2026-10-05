@@ -35,10 +35,11 @@ public class SupabaseClient {
     public static final String ANON_KEY =
         "sb_publishable_HaCpd4tIhhaunf8S-b7FoQ_6uBGzbLM";
 
-    // 备用通道：Cloudflare Worker 反代（见 supabase/cloudflare-proxy/worker.js）。
-    // 部分国内线路按 TLS SNI 封锁 *.supabase.co，直连必然超时。
+    // 备用通道：Cloudflare 反代（Pages Functions，见 supabase/cloudflare-proxy/）。
+    // 这条线路按 DNS 污染 + TLS SNI 双重封锁 *.supabase.co 和 *.workers.dev，
+    // 直连必然超时；*.pages.dev 的 DNS 是干净的，所以反代走 Pages。
     // 留空则只用直连；填了之后两条通道并行探测，谁先通用谁。
-    public static final String PROXY_URL = "";
+    public static final String PROXY_URL = "https://cowdung-proxy.pages.dev";
 
     private static final int PROBE_TIMEOUT = 6000;
     private static volatile String baseUrl;

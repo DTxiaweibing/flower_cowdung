@@ -16,3 +16,7 @@ supabase/drafts/
 
 # 数据库备份产物（含账号数据，绝不提交）
 db_backup/
+
+# wrangler 本地状态与依赖（含账号信息，绝不提交）
+.wrangler/
+node_modules/
