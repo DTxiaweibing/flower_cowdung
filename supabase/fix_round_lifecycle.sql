@@ -361,8 +361,13 @@ begin
       last_b_at   = case when player_b_id = uid then null else last_b_at end,
       ready_a = case when player_a_id = uid then false else ready_a end,
       ready_b = case when player_b_id = uid then false else ready_b end,
-      status = case when player_a_id = null and player_b_id is null then 'open'
-                    else status end,
+      -- 判断 NULL 必须写 is null，写 = null 条件永远为假。
+      -- 另外 Postgres 的 SET 右侧全部按【旧行值】求值，所以不能直接问
+      -- "两人是不是都空了"——离开者本来就占着一个位（见下方 where）。
+      -- "这桌没人了" 的正确判据：每个位要么本来就空，要么就是离开者本人。
+      status = case when (player_a_id is null or player_a_id = uid)
+                     and (player_b_id is null or player_b_id = uid)
+                    then 'open' else status end,
       game_state = case
                      when (player_a_id = uid and player_b_id is null)
                        or (player_b_id = uid and player_a_id is null)
