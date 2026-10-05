@@ -11,6 +11,7 @@ import org.json.JSONArray;
 import org.json.JSONObject;
 
 import java.io.BufferedReader;
+import java.io.IOException;
 import java.io.InputStream;
 import java.io.InputStreamReader;
 import java.io.OutputStream;
@@ -19,6 +20,13 @@ import java.net.URL;
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.concurrent.Callable;
+import java.util.concurrent.CompletionService;
+import java.util.concurrent.ExecutorCompletionService;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.Future;
+import java.util.concurrent.TimeUnit;
 
 public class SupabaseClient {
 
@@ -26,6 +34,15 @@ public class SupabaseClient {
         "https://uihalfuswgilzzhzmgpv.supabase.co";
     public static final String ANON_KEY =
         "sb_publishable_HaCpd4tIhhaunf8S-b7FoQ_6uBGzbLM";
+
+    // 备用通道：Cloudflare Worker 反代（见 supabase/cloudflare-proxy/worker.js）。
+    // 部分国内线路按 TLS SNI 封锁 *.supabase.co，直连必然超时。
+    // 留空则只用直连；填了之后两条通道并行探测，谁先通用谁。
+    public static final String PROXY_URL = "";
+
+    private static final int PROBE_TIMEOUT = 6000;
+    private static volatile String baseUrl;
+    private static final Object BASE_LOCK = new Object();
 
     private static final String PREFS = "CowDungPrefs";
     private static final String KEY_TOKEN   = "SupabaseToken";
@@ -99,7 +116,7 @@ public class SupabaseClient {
             JSONObject body = new JSONObject();
             body.put("email", email);
             body.put("password", password);
-            JSONObject resp = postJson(PROJECT_URL + "/auth/v1/signup", body, null);
+            JSONObject resp = postJson(base() + "/auth/v1/signup", body, null);
             if (resp == null || resp.has("error")) {
                 r.ok = false;
                 r.error = resp == null ? "no_response"
@@ -131,7 +148,7 @@ public class SupabaseClient {
             body.put("email", email);
             body.put("password", password);
             JSONObject resp = postJson(
-                PROJECT_URL + "/auth/v1/token?grant_type=password", body, null);
+                base() + "/auth/v1/token?grant_type=password", body, null);
             if (resp == null || resp.has("error")) {
                 r.ok = false;
                 r.error = resp == null ? "no_response"
@@ -152,7 +169,7 @@ public class SupabaseClient {
     public void signOut() {
         try {
             if (accessToken != null) {
-                postJson(PROJECT_URL + "/auth/v1/logout", new JSONObject(), accessToken);
+                postJson(base() + "/auth/v1/logout", new JSONObject(), accessToken);
             }
         } catch (Exception ignore) { }
         accessToken = null;
@@ -173,7 +190,7 @@ public class SupabaseClient {
             JSONObject body = new JSONObject();
             body.put("refresh_token", refreshToken);
             JSONObject resp = postJson(
-                PROJECT_URL + "/auth/v1/token?grant_type=refresh_token", body, null);
+                base() + "/auth/v1/token?grant_type=refresh_token", body, null);
             if (resp == null || resp.has("error")) {
                 r.ok = false;
                 r.error = resp == null ? "no_response" : "refresh_failed";
@@ -247,7 +264,7 @@ public class SupabaseClient {
     private RpcResult doRpc(String name, JSONObject args, String token) {
         RpcResult r = new RpcResult();
         try {
-            HttpURLConnection conn = open(PROJECT_URL + "/rest/v1/rpc/" + name);
+            HttpURLConnection conn = open(base() + "/rest/v1/rpc/" + name);
             conn.setRequestMethod("POST");
             conn.setRequestProperty("Content-Type", "application/json");
             conn.setRequestProperty("apikey", ANON_KEY);
@@ -290,7 +307,7 @@ public class SupabaseClient {
     public JSONObject readOwnProfile() {
         try {
             if (!ensureFreshToken() || accessToken == null || userId == null) return null;
-            String urlStr = PROJECT_URL + "/rest/v1/profiles?id=eq." + userId;
+            String urlStr = base() + "/rest/v1/profiles?id=eq." + userId;
             URL url = new URL(urlStr);
             HttpURLConnection conn = (HttpURLConnection) url.openConnection();
             conn.setRequestMethod("GET");
@@ -321,7 +338,7 @@ public class SupabaseClient {
     public JSONArray fetchPveTables() {
         try {
             if (!ensureFreshToken() || accessToken == null) return null;
-            String urlStr = PROJECT_URL + "/rest/v1/pve_tables?select=*,player:profiles!pve_tables_player_id_fkey(gender,nickname)&order=num";
+            String urlStr = base() + "/rest/v1/pve_tables?select=*,player:profiles!pve_tables_player_id_fkey(gender,nickname)&order=num";
             URL url = new URL(urlStr);
             HttpURLConnection conn = (HttpURLConnection) url.openConnection();
             conn.setRequestMethod("GET");
@@ -345,7 +362,7 @@ public class SupabaseClient {
     public JSONObject fetchPveTable(String tid) {
         try {
             if (!ensureFreshToken() || accessToken == null) return null;
-            String urlStr = PROJECT_URL + "/rest/v1/pve_tables?select=*,player:profiles!pve_tables_player_id_fkey(gender,nickname)&id=eq." + tid;
+            String urlStr = base() + "/rest/v1/pve_tables?select=*,player:profiles!pve_tables_player_id_fkey(gender,nickname)&id=eq." + tid;
             URL url = new URL(urlStr);
             HttpURLConnection conn = (HttpURLConnection) url.openConnection();
             conn.setRequestMethod("GET");
@@ -428,7 +445,7 @@ public class SupabaseClient {
     public JSONArray fetchPvpTables() {
         try {
             if (!ensureFreshToken() || accessToken == null) return null;
-            String urlStr = PROJECT_URL
+            String urlStr = base()
                 + "/rest/v1/pvp_tables?select=id,num,status,player_a_id,player_b_id,watcher_count,"
                 + "player_a:profiles!pvp_tables_player_a_id_fkey(gender,nickname,id),"
                 + "player_b:profiles!pvp_tables_player_b_id_fkey(gender,nickname,id)&order=num";
@@ -455,7 +472,7 @@ public class SupabaseClient {
     public JSONObject fetchPvpTable(String tid) {
         try {
             if (!ensureFreshToken() || accessToken == null) return null;
-            String urlStr = PROJECT_URL
+            String urlStr = base()
                 + "/rest/v1/pvp_tables?select=*,player_a:profiles!pvp_tables_player_a_id_fkey(gender,nickname,id),"
                 + "player_b:profiles!pvp_tables_player_b_id_fkey(gender,nickname,id)&id=eq." + tid;
             URL url = new URL(urlStr);
@@ -526,7 +543,7 @@ public class SupabaseClient {
                 table = "pvp_watchers";
                 filter = "table_id=eq." + idOrCode;
             }
-            JSONArray watchers = getArray(PROJECT_URL + "/rest/v1/" + table
+            JSONArray watchers = getArray(base() + "/rest/v1/" + table
                     + "?select=user_id&" + filter);
             if (watchers == null || watchers.length() == 0) return result;
             List<String> ids = new ArrayList<>();
@@ -542,7 +559,7 @@ public class SupabaseClient {
                 if (i > 0) inIds.append(",");
                 inIds.append(ids.get(i));
             }
-            JSONArray profs = getArray(PROJECT_URL + "/rest/v1/profiles"
+            JSONArray profs = getArray(base() + "/rest/v1/profiles"
                     + "?select=id,nickname,gender,score,wins,losses,total_games"
                     + "&id=in.(" + inIds + ")");
             if (profs == null) return result;
@@ -668,7 +685,7 @@ public class SupabaseClient {
             if (senderId != null) body.put("sender_id", senderId);
             if (senderName != null) body.put("sender_name", senderName);
             body.put("message", message);
-            JSONObject res = postJson(PROJECT_URL + "/rest/v1/chat_messages", body, accessToken);
+            JSONObject res = postJson(base() + "/rest/v1/chat_messages", body, accessToken);
             return res != null && !res.has("error");
         } catch (Exception e) {
             return false;
@@ -680,7 +697,7 @@ public class SupabaseClient {
         if (scope == null) return null;
         if (!ensureFreshToken() || accessToken == null) return null;
         try {
-            String url = PROJECT_URL + "/rest/v1/chat_messages"
+            String url = base() + "/rest/v1/chat_messages"
                     + "?select=id,sender_id,sender_name,message,created_at"
                     + "&table_id=eq." + enc(scope)
                     + "&id=gt." + lastId
@@ -697,7 +714,7 @@ public class SupabaseClient {
         if (scope == null) return null;
         if (!ensureFreshToken() || accessToken == null) return null;
         try {
-            String url = PROJECT_URL + "/rest/v1/chat_messages"
+            String url = base() + "/rest/v1/chat_messages"
                     + "?select=id,sender_id,sender_name,message,created_at"
                     + "&table_id=eq." + enc(scope)
                     + "&order=id.desc&limit=" + limit;
@@ -807,7 +824,7 @@ public class SupabaseClient {
         if (userId == null) return null;
         if (!ensureFreshToken() || accessToken == null) return null;
         try {
-            String url = PROJECT_URL + "/rest/v1/profiles"
+            String url = base() + "/rest/v1/profiles"
                     + "?select=id,nickname,gender,score,wins,losses,total_games"
                     + "&id=eq." + userId + "&limit=1";
             JSONArray arr = getArray(url);
@@ -888,7 +905,7 @@ public class SupabaseClient {
     public JSONObject fetchRoom(String code) {
         try {
             if (!ensureFreshToken() || accessToken == null) return null;
-            String urlStr = PROJECT_URL
+            String urlStr = base()
                 + "/rest/v1/private_rooms?select=*,player_a:profiles!private_rooms_player_a_id_fkey(gender,nickname,id),"
                 + "player_b:profiles!private_rooms_player_b_id_fkey(gender,nickname,id)&room_code=eq." + code;
             URL url = new URL(urlStr);
@@ -1003,7 +1020,107 @@ public class SupabaseClient {
         }
     }
 
+    // 当前生效的 base：直连与反代并行探测，先返回者胜出，之后整个进程复用。
+    private String base() {
+        String b = baseUrl;
+        if (b != null) return b;
+        synchronized (BASE_LOCK) {
+            if (baseUrl != null) return baseUrl;
+            baseUrl = pickBase();
+            return baseUrl;
+        }
+    }
+
+    private static List<String> candidates() {
+        List<String> list = new ArrayList<>();
+        list.add(PROJECT_URL);
+        if (PROXY_URL != null && !PROXY_URL.trim().isEmpty()) {
+            String p = PROXY_URL.trim();
+            while (p.endsWith("/")) p = p.substring(0, p.length() - 1);
+            if (!p.equals(PROJECT_URL)) list.add(p);
+        }
+        return list;
+    }
+
+    // 并行探测：两个候选同时发请求，谁先拿到 HTTP 响应就用谁。
+    // 串行探测会让被封锁的通道白等满 connect timeout，所以必须并行。
+    private String pickBase() {
+        final List<String> cands = candidates();
+        if (cands.size() == 1) return cands.get(0);
+        ExecutorService pool = Executors.newFixedThreadPool(cands.size());
+        CompletionService<String> cs = new ExecutorCompletionService<>(pool);
+        for (final String c : cands) {
+            cs.submit(new Callable<String>() {
+                @Override public String call() {
+                    return reachable(c) ? c : null;
+                }
+            });
+        }
+        try {
+            long deadline = System.currentTimeMillis() + PROBE_TIMEOUT;
+            for (int i = 0; i < cands.size(); i++) {
+                long remain = deadline - System.currentTimeMillis();
+                if (remain <= 0) break;
+                Future<String> f = cs.poll(remain, TimeUnit.MILLISECONDS);
+                if (f == null) break;
+                String got;
+                try {
+                    got = f.get();
+                } catch (Exception e) {
+                    continue;
+                }
+                if (got != null) return got;
+            }
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+        } finally {
+            pool.shutdownNow();
+        }
+        // 都探不通就还走直连，保留原本的报错路径，不改变既有行为
+        return cands.get(0);
+    }
+
+    // 只要拿到任何 HTTP 状态码就算链路通（401/403 同样是 Supabase 应答）
+    private static boolean reachable(String base) {
+        HttpURLConnection c = null;
+        try {
+            c = (HttpURLConnection) new URL(base + "/rest/v1/").openConnection();
+            c.setRequestMethod("GET");
+            c.setRequestProperty("apikey", ANON_KEY);
+            c.setConnectTimeout(PROBE_TIMEOUT);
+            c.setReadTimeout(PROBE_TIMEOUT);
+            return c.getResponseCode() > 0;
+        } catch (Exception e) {
+            return false;
+        } finally {
+            if (c != null) c.disconnect();
+        }
+    }
+
     private HttpURLConnection open(String urlStr) throws Exception {
+        try {
+            return rawOpen(urlStr);
+        } catch (IOException first) {
+            String switched = switchBase(urlStr);
+            if (switched == null) throw first;
+            return rawOpen(switched);
+        }
+    }
+
+    // 选中通道中途失效（换网络、被封）时改写 URL 换另一条通道，只切一次
+    private String switchBase(String urlStr) {
+        String current = baseUrl;
+        if (current == null) return null;
+        for (String c : candidates()) {
+            if (!c.equals(current) && urlStr.startsWith(current)) {
+                baseUrl = c;
+                return c + urlStr.substring(current.length());
+            }
+        }
+        return null;
+    }
+
+    private HttpURLConnection rawOpen(String urlStr) throws Exception {
         URL url = new URL(urlStr);
         HttpURLConnection conn = (HttpURLConnection) url.openConnection();
         conn.setConnectTimeout(15000);
