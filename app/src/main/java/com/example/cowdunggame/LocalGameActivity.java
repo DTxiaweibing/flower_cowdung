@@ -107,6 +107,8 @@ public class LocalGameActivity extends Activity {
     private String tvPlayerNameId = null;   // 左侧昵称对应玩家 id（点开资料用）
     private String tvComputerNameId = null; // 右侧昵称对应玩家 id（点开资料用）
     private boolean settled = false;       // 本局积分是否已上报（防重复结算）
+    // 当前积分：决定电脑何时启用最优策略（剩余鲜花数 <= 积分 时启用，否则随便拿）
+    private volatile int myScore = 0;
     private String pvpANick = "等待对手入座..."; // A 侧昵称（观战/日志统一显示用）
 
     // 点击昵称打开对方/自己的资料卡
@@ -248,6 +250,7 @@ public class LocalGameActivity extends Activity {
             } else {
                 seatManager.startHeartbeat(tableNo);
             }
+            refreshMyScore(); // 拉取当前积分，供电脑最优策略阈值判断
         }
 
         resetSelectionState();
@@ -1393,6 +1396,7 @@ public class LocalGameActivity extends Activity {
         isGameStarted = true;
         gameCount++;
         isPlayerTurn = (gameCount % 2 == 1);
+        refreshMyScore(); // 开局刷新积分，作为本局电脑最优策略阈值
 
         remainingFlowers = new int[]{1, 2, 3, 4, 5, 6};
         moveList = new JSONArray();
@@ -1512,7 +1516,8 @@ public class LocalGameActivity extends Activity {
     }
 
     private void computerTurn() {
-        ComputerAI.Move move = ComputerAI.getNextMove(remainingFlowers);
+        // 阈值策略：剩余鲜花数 <= 我的积分 时用最优，否则随便拿
+        ComputerAI.Move move = ComputerAI.getNextMove(remainingFlowers, myScore);
         if (move == null) {
             addLog("恭喜" + getPlayerName() + "赢了！电脑被迫拿走了牛粪。");
             reportState("finished", "", "player");
@@ -1567,7 +1572,11 @@ public class LocalGameActivity extends Activity {
             async(new Runnable() {
                 @Override
                 public void run() {
-                    client.pveFinish(client.getUserId(), won);
+                    try {
+                        client.pveFinish(client.getUserId(), won);
+                    } finally {
+                        refreshMyScore(); // 结算后刷新积分（下一局阈值用）
+                    }
                 }
             });
         }
@@ -2146,6 +2155,24 @@ public class LocalGameActivity extends Activity {
     private void async(Runnable r) {
         if (r == null || client == null || tableNo == null) return;
         new Thread(r).start();
+    }
+
+    // 拉取我的当前积分（电脑最优策略阈值用）：开局前/结算后刷新
+    private void refreshMyScore() {
+        if (client == null) return;
+        final String uid = client.getUserId();
+        if (uid == null || uid.isEmpty()) return;
+        async(new Runnable() {
+            @Override
+            public void run() {
+                try {
+                    org.json.JSONObject rk = client.getUserRank(uid);
+                    if (rk != null) {
+                        myScore = rk.optInt("score", myScore);
+                    }
+                } catch (Exception ignore) { }
+            }
+        });
     }
 
     private void showResultImage(boolean playerWin) {

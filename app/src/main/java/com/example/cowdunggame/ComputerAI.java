@@ -50,6 +50,36 @@ public class ComputerAI {
         }
 
         // 必败局面：随机走一步
+        return randomMove(remainingFlowers);
+    }
+
+    /**
+     * 按积分阈值计算电脑走法：剩余鲜花数 <= 当前积分 时启用最优策略，否则随便拿。
+     *
+     * 阈值表现（积分即阈值）：
+     *   0 分：只剩 0 朵才用最优（等效全程随便拿）
+     *   1 分：只剩最后 1 朵时才用最优
+     *   5 分：剩 5 朵及以下开始用最优
+     *  10 分：剩 10 朵及以下开始用最优
+     *  20 分：全程都用最优（开局剩 20 朵）
+     *
+     * @param remainingFlowers 棋盘每排剩余数量，长度 6：[牛粪, 2,3,4,5,6 行]
+     * @param scoreThreshold    当前积分（阈值）
+     * @return Move 走法；若无可拿鲜花返回 null
+     */
+    public static Move getNextMove(int[] remainingFlowers, int scoreThreshold) {
+        int totalFlowers = 0;
+        for (int i = 1; i < remainingFlowers.length; i++) {
+            totalFlowers += remainingFlowers[i];
+        }
+        if (totalFlowers <= scoreThreshold) {
+            return getNextMove(remainingFlowers); // 启用最优策略
+        }
+        return randomMove(remainingFlowers);      // 随便拿
+    }
+
+    // 随便拿一步（无棋可走返回 null）
+    private static Move randomMove(int[] remainingFlowers) {
         ArrayList<Integer> availableRows = new ArrayList<>();
         for (int i = 1; i < remainingFlowers.length; i++) {
             if (remainingFlowers[i] > 0) {
