@@ -35,12 +35,13 @@ public class GameTableView extends FrameLayout {
     private TextView labelView;
     private TextView leftNickView;
     private TextView rightNickView;
+    private TextView watcherCountView;
 
     // 状态
     private boolean playing = false;
     private boolean leftOccupied = false;
     private boolean rightOccupied = false;
-    private boolean spectators = false;
+    private int watcherCount = 0;
     private boolean leftMale = true;
     private boolean rightMale = true;
     private boolean botRight = false; // 右侧固定 AIBOT 头像
@@ -176,6 +177,21 @@ public class GameTableView extends FrameLayout {
         bottomSeat.setLayoutParams(bp);
         addView(bottomSeat);
 
+        // 观众人数角标：叠在上观众头像下半部，观众 >= 3 时才显示"N 人"
+        watcherCountView = new TextView(context);
+        watcherCountView.setTextColor(Color.WHITE);
+        watcherCountView.setTextSize(10);
+        watcherCountView.setGravity(Gravity.CENTER);
+        watcherCountView.setSingleLine(true);
+        watcherCountView.setShadowLayer(3, 1, 1, Color.BLACK);
+        int badgeH = (int) (16 * context.getResources().getDisplayMetrics().density);
+        FrameLayout.LayoutParams wp = new FrameLayout.LayoutParams(head, badgeH);
+        wp.leftMargin = mid - head / 2;
+        wp.topMargin = head - badgeH;
+        watcherCountView.setLayoutParams(wp);
+        watcherCountView.setVisibility(GONE);
+        addView(watcherCountView);
+
         refresh();
     }
 
@@ -209,19 +225,19 @@ public class GameTableView extends FrameLayout {
         refresh();
     }
 
-    // 上下观众位
-    public void setSpectators(boolean occupied) {
-        this.spectators = occupied;
+    // 上下观众位：count=1 亮下，count>=2 上下都亮，count>=3 上头像叠人数角标
+    public void setSpectators(int count) {
+        this.watcherCount = count;
         refresh();
     }
 
     // 便捷：整桌状态一次设置
-    public void setState(boolean playing, boolean left, boolean right, boolean spectators,
+    public void setState(boolean playing, boolean left, boolean right, int watcherCount,
                          boolean leftMale, boolean rightMale, boolean botRight) {
         this.playing = playing;
         this.leftOccupied = left;
         this.rightOccupied = right;
-        this.spectators = spectators;
+        this.watcherCount = watcherCount;
         this.leftMale = leftMale;
         this.rightMale = rightMale;
         this.botRight = botRight;
@@ -286,7 +302,7 @@ public class GameTableView extends FrameLayout {
             }
         }
         if (topSeat != null) {
-            if (spectators) {
+            if (watcherCount >= 2) {
                 topSeat.setImageResource(R.drawable.viewers);
                 topSeat.setAlpha(1.0f);
             } else {
@@ -294,11 +310,19 @@ public class GameTableView extends FrameLayout {
             }
         }
         if (bottomSeat != null) {
-            if (spectators) {
+            if (watcherCount >= 1) {
                 bottomSeat.setImageResource(R.drawable.viewers);
                 bottomSeat.setAlpha(1.0f);
             } else {
                 bottomSeat.setImageResource(R.drawable.avatar_player_empty);
+            }
+        }
+        if (watcherCountView != null) {
+            if (watcherCount >= 3) {
+                watcherCountView.setText(watcherCount + " 人");
+                watcherCountView.setVisibility(VISIBLE);
+            } else {
+                watcherCountView.setVisibility(GONE);
             }
         }
     }

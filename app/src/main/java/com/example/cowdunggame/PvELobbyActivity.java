@@ -151,7 +151,7 @@ public class PvELobbyActivity extends Activity {
         else label += "·空闲";
         table.setTableNo(label);
 
-        table.setState(playing, hasPlayer || iAmPlayer, false, watchers > 0,
+        table.setState(playing, hasPlayer || iAmPlayer, false, watchers,
             leftMale, true, true); // 右侧恒为 AIBOT；左座按性别显示男女头像
         if (hasPlayer) {
             table.setPlayerLabel(leftNick); // 头像正下方显示昵称（仅玩家，观众不做）

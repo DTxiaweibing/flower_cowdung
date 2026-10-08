@@ -59,7 +59,7 @@ public class MenuActivity extends Activity {
             sceneLayout.cardSidePx, sceneLayout.cardSidePx);
         sceneParams.gravity = Gravity.CENTER;
         sceneTable.setLayoutParams(sceneParams);
-        sceneTable.setState(true, true, true, true, true, false, false);
+        sceneTable.setState(true, true, true, 3, true, false, false);
         root.addView(sceneTable);
 
         TextView title = new TextView(this);

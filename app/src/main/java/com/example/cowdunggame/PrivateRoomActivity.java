@@ -238,7 +238,7 @@ public class PrivateRoomActivity extends Activity {
         else label += "·空闲";
         table.setTableNo(label);
 
-        table.setState(playing, hasA, hasB, watchers > 0,
+        table.setState(playing, hasA, hasB, watchers,
             leftMale, rightMale, false);
         if (hasA) table.setPlayerLabel(aNick.isEmpty() ? "先入座" : aNick);
         if (hasB) table.setRightPlayerLabel(bNick.isEmpty() ? "后入座" : bNick);
