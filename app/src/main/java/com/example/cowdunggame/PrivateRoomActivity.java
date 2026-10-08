@@ -133,8 +133,23 @@ public class PrivateRoomActivity extends Activity {
         btnLeave.setOnClickListener(new View.OnClickListener() {
             @Override
             public void onClick(View v) {
-                // 直接 finish，退回初始页（房间状态由服务端管理）
-                finish();
+                // 主动离开房间
+                new Thread(new Runnable() {
+                    @Override
+                    public void run() {
+                        try {
+                            if (client != null && roomCode != null) {
+                                client.roomLeave(roomCode);
+                            }
+                        } catch (Exception ignore) {}
+                        runOnUiThread(new Runnable() {
+                            @Override
+                            public void run() {
+                                finish();
+                            }
+                        });
+                    }
+                }).start();
             }
         });
         bottomBar.addView(btnLeave);
@@ -372,15 +387,60 @@ public class PrivateRoomActivity extends Activity {
     }
 
     @Override
+    public void onBackPressed() {
+        new Thread(new Runnable() {
+            @Override
+            public void run() {
+                try {
+                    if (client != null && roomCode != null) {
+                        client.roomLeave(roomCode);
+                    }
+                } catch (Exception ignore) {}
+                runOnUiThread(new Runnable() {
+                    @Override
+                    public void run() {
+                        PrivateRoomActivity.super.onBackPressed();
+                    }
+                });
+            }
+        }).start();
+    }
+
+    @Override
+    protected void onPause() {
+        super.onPause();
+        if (seatManager != null) {
+            seatManager.pauseHeartbeat();
+        }
+    }
+
+    @Override
     protected void onResume() {
         super.onResume();
         if (client != null && roomCode != null) startPolling();
+        if (seatManager != null && roomCode != null) {
+            seatManager.startRoomHeartbeat(roomCode);
+        }
     }
 
     @Override
     protected void onDestroy() {
         super.onDestroy();
+        if (seatManager != null) {
+            seatManager.stopHeartbeat();
+        }
         ui.removeCallbacks(pollRunnable);
+        try {
+            if (client != null && roomCode != null) {
+                final String rc = roomCode;
+                new Thread(new Runnable() {
+                    @Override
+                    public void run() {
+                        try { client.roomLeave(rc); } catch (Exception ignore) {}
+                    }
+                }).start();
+            }
+        } catch (Exception ignore) {}
     }
 
     // ============================================================

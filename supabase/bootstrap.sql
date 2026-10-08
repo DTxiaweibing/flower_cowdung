@@ -1,26 +1,18 @@
 -- ============================================================================
---  花牌cowdung —— 完整建库脚本 (bootstrap)
+--  鑺辩墝cowdung 鈥斺€?瀹屾暣寤哄簱鑴氭湰 (bootstrap)
 -- ============================================================================
---  用途：在【全新的 Supabase 项目】里一次性建出与线上完全一致的结构，
---        不含任何业务数据。
+--  鐢ㄩ€旓細鍦ㄣ€愬叏鏂扮殑 Supabase 椤圭洰銆戦噷涓€娆℃€у缓鍑轰笌绾夸笂瀹屽叏涓€鑷寸殑缁撴瀯锛?--        涓嶅惈浠讳綍涓氬姟鏁版嵁銆?--
+--  鏉ユ簮锛歞b_backup/schema.sql锛?026-10-03 浠庣嚎涓婂鍑虹殑鐪熷疄缁撴瀯锛?--        + cron 瀹氭椂浠诲姟锛堝浠介噷涓嶅惈锛岄渶浠庤剼鏈ˉ榻愶級
+--        + room_leave 淇锛?026-10-05锛屽湪澶囦唤涔嬪悗淇殑锛?--
+--  鎵ц鏂瑰紡锛歋upabase 鎺у埗鍙?-> SQL Editor -> 鏂板缓鏌ヨ -> 鍏ㄩ€夌矘璐?-> Run
+--            鍙互閲嶅鎵ц锛屼笉浼氱牬鍧忓凡鏈夋暟鎹€?--
+--  缁勬垚锛?--    绗?1 閮ㄥ垎  public schema锛氳〃 / 绾︽潫 / 绱㈠紩 / 鍑芥暟 / 瑙﹀彂鍣?/ RLS / 绛栫暐 / 鏉冮檺
+--    绗?2 閮ㄥ垎  auth 閽╁瓙锛氭敞鍐屾柊鐢ㄦ埛鏃惰嚜鍔ㄥ缓 profile
+--    绗?3 閮ㄥ垎  room_leave 淇锛堣鐩栧浠介噷鐨勬棫鐗堟湰锛?--    绗?4 閮ㄥ垎  12 涓?cron 瀹氭椂浠诲姟
+--    绗?5 閮ㄥ垎  鏀跺熬鏍￠獙锛氫换鍔℃暟閲忎笉瀵瑰氨鐩存帴鎶ラ敊
 --
---  来源：db_backup/schema.sql（2026-10-03 从线上导出的真实结构）
---        + cron 定时任务（备份里不含，需从脚本补齐）
---        + room_leave 修复（2026-10-05，在备份之后修的）
---
---  执行方式：Supabase 控制台 -> SQL Editor -> 新建查询 -> 全选粘贴 -> Run
---            可以重复执行，不会破坏已有数据。
---
---  组成：
---    第 1 部分  public schema：表 / 约束 / 索引 / 函数 / 触发器 / RLS / 策略 / 权限
---    第 2 部分  auth 钩子：注册新用户时自动建 profile
---    第 3 部分  room_leave 修复（覆盖备份里的旧版本）
---    第 4 部分  12 个 cron 定时任务
---    第 5 部分  收尾校验：任务数量不对就直接报错
---
---  注意：备份里的 auth schema 段（Supabase 自带的 27 张表 / 183 条授权）
---        在新项目里本来就存在，重放会冲突，所以没有包含进来。
--- ============================================================================
+--  娉ㄦ剰锛氬浠介噷鐨?auth schema 娈碉紙Supabase 鑷甫鐨?27 寮犺〃 / 183 鏉℃巿鏉冿級
+--        鍦ㄦ柊椤圭洰閲屾湰鏉ュ氨瀛樺湪锛岄噸鏀句細鍐茬獊锛屾墍浠ユ病鏈夊寘鍚繘鏉ャ€?-- ============================================================================
 
 -- --------------------------------------------------------------------------
 -- PART 1  public schema
@@ -185,71 +177,71 @@ create table if not exists "public"."rooms" (
   "last_active_at" timestamp with time zone default now() not null,
   "created_at" timestamp with time zone default now() not null
 );
-alter table "public"."chat_messages" add constraint "chat_messages_pkey" PRIMARY KEY (id);
-alter table "public"."games" add constraint "games_loser_id_fkey" FOREIGN KEY (loser_id) REFERENCES profiles(id) ON DELETE SET NULL;
-alter table "public"."games" add constraint "games_pkey" PRIMARY KEY (id);
-alter table "public"."games" add constraint "games_player_a_id_fkey" FOREIGN KEY (player_a_id) REFERENCES profiles(id) ON DELETE CASCADE;
-alter table "public"."games" add constraint "games_player_b_id_fkey" FOREIGN KEY (player_b_id) REFERENCES profiles(id) ON DELETE CASCADE;
-alter table "public"."games" add constraint "games_room_type_check" CHECK (room_type = ANY (ARRAY['lobby'::text, 'private'::text]));
-alter table "public"."games" add constraint "games_winner_id_fkey" FOREIGN KEY (winner_id) REFERENCES profiles(id) ON DELETE SET NULL;
-alter table "public"."lobby_tables" add constraint "lobby_table_players_differ" CHECK (NOT (player_a_id IS NOT NULL AND player_b_id IS NOT NULL AND player_a_id = player_b_id));
-alter table "public"."lobby_tables" add constraint "lobby_tables_current_turn_id_fkey" FOREIGN KEY (current_turn_id) REFERENCES profiles(id) ON DELETE SET NULL;
-alter table "public"."lobby_tables" add constraint "lobby_tables_pkey" PRIMARY KEY (id);
-alter table "public"."lobby_tables" add constraint "lobby_tables_player_a_id_fkey" FOREIGN KEY (player_a_id) REFERENCES profiles(id) ON DELETE SET NULL;
-alter table "public"."lobby_tables" add constraint "lobby_tables_player_b_id_fkey" FOREIGN KEY (player_b_id) REFERENCES profiles(id) ON DELETE SET NULL;
-alter table "public"."lobby_tables" add constraint "lobby_tables_status_check" CHECK (status = ANY (ARRAY['waiting'::text, 'playing'::text, 'finished'::text]));
-alter table "public"."private_room_watcher_bans" add constraint "private_room_watcher_bans_created_by_fkey" FOREIGN KEY (created_by) REFERENCES profiles(id) ON DELETE SET NULL;
-alter table "public"."private_room_watcher_bans" add constraint "private_room_watcher_bans_pkey" PRIMARY KEY (room_code, user_id);
-alter table "public"."private_room_watcher_bans" add constraint "private_room_watcher_bans_room_code_fkey" FOREIGN KEY (room_code) REFERENCES private_rooms(room_code) ON DELETE CASCADE;
-alter table "public"."private_room_watcher_bans" add constraint "private_room_watcher_bans_user_id_fkey" FOREIGN KEY (user_id) REFERENCES profiles(id) ON DELETE CASCADE;
-alter table "public"."private_room_watchers" add constraint "private_room_watchers_pkey" PRIMARY KEY (room_code, user_id);
-alter table "public"."private_room_watchers" add constraint "private_room_watchers_room_code_fkey" FOREIGN KEY (room_code) REFERENCES private_rooms(room_code) ON DELETE CASCADE;
-alter table "public"."private_room_watchers" add constraint "private_room_watchers_user_id_fkey" FOREIGN KEY (user_id) REFERENCES profiles(id) ON DELETE CASCADE;
-alter table "public"."private_room_watchers" add constraint "private_room_watchers_user_key" UNIQUE (user_id);
-alter table "public"."private_rooms" add constraint "private_room_players_differ" CHECK (NOT (player_a_id IS NOT NULL AND player_b_id IS NOT NULL AND player_a_id = player_b_id));
-alter table "public"."private_rooms" add constraint "private_rooms_current_turn_id_fkey" FOREIGN KEY (current_turn_id) REFERENCES profiles(id) ON DELETE SET NULL;
-alter table "public"."private_rooms" add constraint "private_rooms_pkey" PRIMARY KEY (room_code);
-alter table "public"."private_rooms" add constraint "private_rooms_player_a_id_fkey" FOREIGN KEY (player_a_id) REFERENCES profiles(id) ON DELETE SET NULL;
-alter table "public"."private_rooms" add constraint "private_rooms_player_b_id_fkey" FOREIGN KEY (player_b_id) REFERENCES profiles(id) ON DELETE SET NULL;
-alter table "public"."private_rooms" add constraint "private_rooms_status_check" CHECK (status = ANY (ARRAY['open'::text, 'seated'::text, 'playing'::text]));
-alter table "public"."profiles" add constraint "profiles_gender_check" CHECK (gender = ANY (ARRAY['male'::text, 'female'::text]));
-alter table "public"."profiles" add constraint "profiles_id_fkey" FOREIGN KEY (id) REFERENCES auth.users(id) ON DELETE CASCADE;
-alter table "public"."profiles" add constraint "profiles_nickname_key" UNIQUE (nickname);
 alter table "public"."profiles" add constraint "profiles_pkey" PRIMARY KEY (id);
-alter table "public"."pve_tables" add constraint "pve_tables_num_key" UNIQUE (num);
 alter table "public"."pve_tables" add constraint "pve_tables_pkey" PRIMARY KEY (id);
-alter table "public"."pve_tables" add constraint "pve_tables_player_id_fkey" FOREIGN KEY (player_id) REFERENCES profiles(id) ON DELETE SET NULL;
-alter table "public"."pve_tables" add constraint "pve_tables_status_check" CHECK (status = ANY (ARRAY['open'::text, 'seated'::text, 'playing'::text]));
+alter table "public"."private_rooms" add constraint "private_rooms_pkey" PRIMARY KEY (room_code);
+alter table "public"."private_room_watcher_bans" add constraint "private_room_watcher_bans_pkey" PRIMARY KEY (room_code, user_id);
+alter table "public"."private_room_watchers" add constraint "private_room_watchers_pkey" PRIMARY KEY (room_code, user_id);
 alter table "public"."pve_watchers" add constraint "pve_watchers_pkey" PRIMARY KEY (table_id, user_id);
-alter table "public"."pve_watchers" add constraint "pve_watchers_table_id_fkey" FOREIGN KEY (table_id) REFERENCES pve_tables(id) ON DELETE CASCADE;
-alter table "public"."pve_watchers" add constraint "pve_watchers_user_id_fkey" FOREIGN KEY (user_id) REFERENCES profiles(id) ON DELETE CASCADE;
-alter table "public"."pve_watchers" add constraint "pve_watchers_user_key" UNIQUE (user_id);
-alter table "public"."pvp_tables" add constraint "pvp_table_players_differ" CHECK (NOT (player_a_id IS NOT NULL AND player_b_id IS NOT NULL AND player_a_id = player_b_id));
-alter table "public"."pvp_tables" add constraint "pvp_tables_current_turn_id_fkey" FOREIGN KEY (current_turn_id) REFERENCES profiles(id) ON DELETE SET NULL;
-alter table "public"."pvp_tables" add constraint "pvp_tables_num_key" UNIQUE (num);
-alter table "public"."pvp_tables" add constraint "pvp_tables_pkey" PRIMARY KEY (id);
-alter table "public"."pvp_tables" add constraint "pvp_tables_player_a_id_fkey" FOREIGN KEY (player_a_id) REFERENCES profiles(id) ON DELETE SET NULL;
-alter table "public"."pvp_tables" add constraint "pvp_tables_player_b_id_fkey" FOREIGN KEY (player_b_id) REFERENCES profiles(id) ON DELETE SET NULL;
-alter table "public"."pvp_tables" add constraint "pvp_tables_status_check" CHECK (status = ANY (ARRAY['open'::text, 'seated'::text, 'playing'::text]));
-alter table "public"."pvp_watcher_bans" add constraint "pvp_watcher_bans_created_by_fkey" FOREIGN KEY (created_by) REFERENCES profiles(id) ON DELETE SET NULL;
-alter table "public"."pvp_watcher_bans" add constraint "pvp_watcher_bans_pkey" PRIMARY KEY (table_id, user_id);
-alter table "public"."pvp_watcher_bans" add constraint "pvp_watcher_bans_table_id_fkey" FOREIGN KEY (table_id) REFERENCES pvp_tables(id) ON DELETE CASCADE;
-alter table "public"."pvp_watcher_bans" add constraint "pvp_watcher_bans_user_id_fkey" FOREIGN KEY (user_id) REFERENCES profiles(id) ON DELETE CASCADE;
-alter table "public"."pvp_watchers" add constraint "pvp_watchers_pkey" PRIMARY KEY (table_id, user_id);
-alter table "public"."pvp_watchers" add constraint "pvp_watchers_table_id_fkey" FOREIGN KEY (table_id) REFERENCES pvp_tables(id) ON DELETE CASCADE;
-alter table "public"."pvp_watchers" add constraint "pvp_watchers_user_id_fkey" FOREIGN KEY (user_id) REFERENCES profiles(id) ON DELETE CASCADE;
-alter table "public"."pvp_watchers" add constraint "pvp_watchers_user_key" UNIQUE (user_id);
 alter table "public"."room_members" add constraint "room_members_pkey" PRIMARY KEY (room_code, user_id);
+alter table "public"."rooms" add constraint "rooms_pkey" PRIMARY KEY (room_code);
+alter table "public"."pvp_watchers" add constraint "pvp_watchers_pkey" PRIMARY KEY (table_id, user_id);
+alter table "public"."pvp_tables" add constraint "pvp_tables_pkey" PRIMARY KEY (id);
+alter table "public"."pvp_watcher_bans" add constraint "pvp_watcher_bans_pkey" PRIMARY KEY (table_id, user_id);
+alter table "public"."games" add constraint "games_pkey" PRIMARY KEY (id);
+alter table "public"."lobby_tables" add constraint "lobby_tables_pkey" PRIMARY KEY (id);
+alter table "public"."chat_messages" add constraint "chat_messages_pkey" PRIMARY KEY (id);
+alter table "public"."profiles" add constraint "profiles_nickname_key" UNIQUE (nickname);
+alter table "public"."private_room_watchers" add constraint "private_room_watchers_user_key" UNIQUE (user_id);
+alter table "public"."pve_tables" add constraint "pve_tables_num_key" UNIQUE (num);
+alter table "public"."pvp_watchers" add constraint "pvp_watchers_user_key" UNIQUE (user_id);
+alter table "public"."pve_watchers" add constraint "pve_watchers_user_key" UNIQUE (user_id);
+alter table "public"."pvp_tables" add constraint "pvp_tables_num_key" UNIQUE (num);
+alter table "public"."profiles" add constraint "profiles_gender_check" CHECK (gender = ANY (ARRAY['male'::text, 'female'::text]));
+alter table "public"."pvp_tables" add constraint "pvp_tables_status_check" CHECK (status = ANY (ARRAY['open'::text, 'seated'::text, 'playing'::text]));
+alter table "public"."lobby_tables" add constraint "lobby_table_players_differ" CHECK (NOT (player_a_id IS NOT NULL AND player_b_id IS NOT NULL AND player_a_id = player_b_id));
+alter table "public"."pvp_tables" add constraint "pvp_table_players_differ" CHECK (NOT (player_a_id IS NOT NULL AND player_b_id IS NOT NULL AND player_a_id = player_b_id));
+alter table "public"."games" add constraint "games_room_type_check" CHECK (room_type = ANY (ARRAY['lobby'::text, 'private'::text]));
+alter table "public"."pve_tables" add constraint "pve_tables_status_check" CHECK (status = ANY (ARRAY['open'::text, 'seated'::text, 'playing'::text]));
+alter table "public"."private_rooms" add constraint "private_rooms_status_check" CHECK (status = ANY (ARRAY['open'::text, 'seated'::text, 'playing'::text]));
+alter table "public"."rooms" add constraint "room_players_differ" CHECK (NOT (player_a_id IS NOT NULL AND player_b_id IS NOT NULL AND player_a_id = player_b_id));
+alter table "public"."private_rooms" add constraint "private_room_players_differ" CHECK (NOT (player_a_id IS NOT NULL AND player_b_id IS NOT NULL AND player_a_id = player_b_id));
+alter table "public"."rooms" add constraint "rooms_status_check" CHECK (status = ANY (ARRAY['waiting'::text, 'playing'::text, 'finished'::text]));
 alter table "public"."room_members" add constraint "room_members_role_check" CHECK (role = ANY (ARRAY['player'::text, 'watcher'::text]));
+alter table "public"."lobby_tables" add constraint "lobby_tables_status_check" CHECK (status = ANY (ARRAY['waiting'::text, 'playing'::text, 'finished'::text]));
+alter table "public"."lobby_tables" add constraint "lobby_tables_player_b_id_fkey" FOREIGN KEY (player_b_id) REFERENCES profiles(id) ON DELETE SET NULL;
+alter table "public"."pvp_watcher_bans" add constraint "pvp_watcher_bans_user_id_fkey" FOREIGN KEY (user_id) REFERENCES profiles(id) ON DELETE CASCADE;
+alter table "public"."pvp_watcher_bans" add constraint "pvp_watcher_bans_created_by_fkey" FOREIGN KEY (created_by) REFERENCES profiles(id) ON DELETE SET NULL;
+alter table "public"."games" add constraint "games_loser_id_fkey" FOREIGN KEY (loser_id) REFERENCES profiles(id) ON DELETE SET NULL;
+alter table "public"."pvp_watcher_bans" add constraint "pvp_watcher_bans_table_id_fkey" FOREIGN KEY (table_id) REFERENCES pvp_tables(id) ON DELETE CASCADE;
+alter table "public"."games" add constraint "games_player_a_id_fkey" FOREIGN KEY (player_a_id) REFERENCES profiles(id) ON DELETE CASCADE;
+alter table "public"."rooms" add constraint "rooms_current_turn_id_fkey" FOREIGN KEY (current_turn_id) REFERENCES profiles(id) ON DELETE SET NULL;
+alter table "public"."pvp_watchers" add constraint "pvp_watchers_user_id_fkey" FOREIGN KEY (user_id) REFERENCES profiles(id) ON DELETE CASCADE;
 alter table "public"."room_members" add constraint "room_members_room_code_fkey" FOREIGN KEY (room_code) REFERENCES rooms(room_code) ON DELETE CASCADE;
 alter table "public"."room_members" add constraint "room_members_user_id_fkey" FOREIGN KEY (user_id) REFERENCES profiles(id) ON DELETE CASCADE;
-alter table "public"."rooms" add constraint "room_players_differ" CHECK (NOT (player_a_id IS NOT NULL AND player_b_id IS NOT NULL AND player_a_id = player_b_id));
-alter table "public"."rooms" add constraint "rooms_current_turn_id_fkey" FOREIGN KEY (current_turn_id) REFERENCES profiles(id) ON DELETE SET NULL;
-alter table "public"."rooms" add constraint "rooms_host_id_fkey" FOREIGN KEY (host_id) REFERENCES profiles(id) ON DELETE SET NULL;
-alter table "public"."rooms" add constraint "rooms_pkey" PRIMARY KEY (room_code);
-alter table "public"."rooms" add constraint "rooms_player_a_id_fkey" FOREIGN KEY (player_a_id) REFERENCES profiles(id) ON DELETE SET NULL;
+alter table "public"."pvp_watchers" add constraint "pvp_watchers_table_id_fkey" FOREIGN KEY (table_id) REFERENCES pvp_tables(id) ON DELETE CASCADE;
 alter table "public"."rooms" add constraint "rooms_player_b_id_fkey" FOREIGN KEY (player_b_id) REFERENCES profiles(id) ON DELETE SET NULL;
-alter table "public"."rooms" add constraint "rooms_status_check" CHECK (status = ANY (ARRAY['waiting'::text, 'playing'::text, 'finished'::text]));
+alter table "public"."rooms" add constraint "rooms_host_id_fkey" FOREIGN KEY (host_id) REFERENCES profiles(id) ON DELETE SET NULL;
+alter table "public"."rooms" add constraint "rooms_player_a_id_fkey" FOREIGN KEY (player_a_id) REFERENCES profiles(id) ON DELETE SET NULL;
+alter table "public"."private_rooms" add constraint "private_rooms_current_turn_id_fkey" FOREIGN KEY (current_turn_id) REFERENCES profiles(id) ON DELETE SET NULL;
+alter table "public"."private_room_watchers" add constraint "private_room_watchers_user_id_fkey" FOREIGN KEY (user_id) REFERENCES profiles(id) ON DELETE CASCADE;
+alter table "public"."private_rooms" add constraint "private_rooms_player_a_id_fkey" FOREIGN KEY (player_a_id) REFERENCES profiles(id) ON DELETE SET NULL;
+alter table "public"."lobby_tables" add constraint "lobby_tables_current_turn_id_fkey" FOREIGN KEY (current_turn_id) REFERENCES profiles(id) ON DELETE SET NULL;
+alter table "public"."private_room_watchers" add constraint "private_room_watchers_room_code_fkey" FOREIGN KEY (room_code) REFERENCES private_rooms(room_code) ON DELETE CASCADE;
+alter table "public"."lobby_tables" add constraint "lobby_tables_player_a_id_fkey" FOREIGN KEY (player_a_id) REFERENCES profiles(id) ON DELETE SET NULL;
+alter table "public"."private_room_watcher_bans" add constraint "private_room_watcher_bans_created_by_fkey" FOREIGN KEY (created_by) REFERENCES profiles(id) ON DELETE SET NULL;
+alter table "public"."private_room_watcher_bans" add constraint "private_room_watcher_bans_user_id_fkey" FOREIGN KEY (user_id) REFERENCES profiles(id) ON DELETE CASCADE;
+alter table "public"."private_room_watcher_bans" add constraint "private_room_watcher_bans_room_code_fkey" FOREIGN KEY (room_code) REFERENCES private_rooms(room_code) ON DELETE CASCADE;
+alter table "public"."private_rooms" add constraint "private_rooms_player_b_id_fkey" FOREIGN KEY (player_b_id) REFERENCES profiles(id) ON DELETE SET NULL;
+alter table "public"."games" add constraint "games_player_b_id_fkey" FOREIGN KEY (player_b_id) REFERENCES profiles(id) ON DELETE CASCADE;
+alter table "public"."pvp_tables" add constraint "pvp_tables_current_turn_id_fkey" FOREIGN KEY (current_turn_id) REFERENCES profiles(id) ON DELETE SET NULL;
+alter table "public"."pvp_tables" add constraint "pvp_tables_player_b_id_fkey" FOREIGN KEY (player_b_id) REFERENCES profiles(id) ON DELETE SET NULL;
+alter table "public"."pvp_tables" add constraint "pvp_tables_player_a_id_fkey" FOREIGN KEY (player_a_id) REFERENCES profiles(id) ON DELETE SET NULL;
+alter table "public"."pve_watchers" add constraint "pve_watchers_user_id_fkey" FOREIGN KEY (user_id) REFERENCES profiles(id) ON DELETE CASCADE;
+alter table "public"."games" add constraint "games_winner_id_fkey" FOREIGN KEY (winner_id) REFERENCES profiles(id) ON DELETE SET NULL;
+alter table "public"."profiles" add constraint "profiles_id_fkey" FOREIGN KEY (id) REFERENCES auth.users(id) ON DELETE CASCADE;
+alter table "public"."pve_watchers" add constraint "pve_watchers_table_id_fkey" FOREIGN KEY (table_id) REFERENCES pve_tables(id) ON DELETE CASCADE;
+alter table "public"."pve_tables" add constraint "pve_tables_player_id_fkey" FOREIGN KEY (player_id) REFERENCES profiles(id) ON DELETE SET NULL;
 CREATE INDEX chat_messages_table_idx ON public.chat_messages USING btree (table_id, id);
 CREATE INDEX games_room_code_idx ON public.games USING btree (room_code);
 CREATE INDEX games_room_type_idx ON public.games USING btree (room_type, finished_at DESC);
@@ -270,7 +262,7 @@ CREATE OR REPLACE FUNCTION public.auth_uid_safe()
  RETURNS uuid
  LANGUAGE sql
  STABLE
-AS $function$select auth.uid();$function$
+AS $function$select auth.uid();$function$;
 
 CREATE OR REPLACE FUNCTION public.check_nickname(n text)
  RETURNS boolean
@@ -281,7 +273,7 @@ AS $function$
 
   select not exists (select 1 from public.profiles where nickname = n)
 
-$function$
+$function$;
 
 CREATE OR REPLACE FUNCTION public.cleanup_stale_rooms()
  RETURNS integer
@@ -296,7 +288,7 @@ declare
 
 begin
 
-  -- 清理超过1小时没有活跃的房间（仅限等待状态）
+  -- 娓呯悊瓒呰繃1灏忔椂娌℃湁娲昏穬鐨勬埧闂达紙浠呴檺绛夊緟鐘舵€侊級
 
   delete from public.room_members
 
@@ -314,7 +306,7 @@ begin
 
   
 
-  -- 清理房间
+  -- 娓呯悊鎴块棿
 
   delete from public.rooms
 
@@ -332,7 +324,7 @@ begin
 
 end;
 
-$function$
+$function$;
 
 CREATE OR REPLACE FUNCTION public.clear_table_chat(p_table_id text)
  RETURNS void
@@ -343,7 +335,7 @@ AS $function$
 
   delete from public.chat_messages where table_id = p_table_id;
 
-$function$
+$function$;
 
 CREATE OR REPLACE FUNCTION public.create_lobby_table()
  RETURNS text
@@ -386,7 +378,7 @@ begin
 
 
 
-  -- 生成唯一桌号
+  -- 鐢熸垚鍞竴妗屽彿
 
   loop
 
@@ -408,7 +400,7 @@ begin
 
 end;
 
-$function$
+$function$;
 
 CREATE OR REPLACE FUNCTION public.create_profile(nick text, g text)
  RETURNS uuid
@@ -479,7 +471,7 @@ begin
 
 end;
 
-$function$
+$function$;
 
 CREATE OR REPLACE FUNCTION public.create_room()
  RETURNS character
@@ -524,7 +516,7 @@ begin
 
 end;
 
-$function$
+$function$;
 
 CREATE OR REPLACE FUNCTION public.finish_game(in_table_id text DEFAULT NULL::text, in_room_code character DEFAULT NULL::bpchar, in_room_type text DEFAULT 'lobby'::text, in_winner_id uuid DEFAULT NULL::uuid, in_loser_id uuid DEFAULT NULL::uuid, in_moves jsonb DEFAULT NULL::jsonb)
  RETURNS uuid
@@ -639,7 +631,7 @@ begin
 
 end;
 
-$function$
+$function$;
 
 CREATE OR REPLACE FUNCTION public.get_game_state(in_table_id text DEFAULT NULL::text, in_room_code character DEFAULT NULL::bpchar)
  RETURNS jsonb
@@ -678,7 +670,7 @@ begin
 
 end;
 
-$function$
+$function$;
 
 CREATE OR REPLACE FUNCTION public.get_ranking(limit_n integer DEFAULT 100)
  RETURNS TABLE(id uuid, nickname text, gender text, score integer, wins integer, losses integer, total_games integer)
@@ -703,7 +695,7 @@ begin
 
 end;
 
-$function$
+$function$;
 
 CREATE OR REPLACE FUNCTION public.get_user_rank(in_user_id uuid)
  RETURNS TABLE(rank integer, score integer, wins integer, losses integer, total_games integer)
@@ -742,26 +734,8 @@ begin
 
 end;
 
-$function$
+$function$;
 
-CREATE OR REPLACE FUNCTION public.handle_new_user()
- RETURNS trigger
- LANGUAGE plpgsql
- SECURITY DEFINER
- SET search_path TO 'public'
-AS $function$
-
-begin
-
-  insert into public.profiles (id) values (new.id)
-
-  on conflict (id) do nothing;
-
-  return new;
-
-end;
-
-$function$
 
 CREATE OR REPLACE FUNCTION public.host_kick(code character, target uuid)
  RETURNS boolean
@@ -778,7 +752,7 @@ begin
 
   if uid is null then raise exception 'NOT_AUTHENTICATED'; end if;
 
-  -- 仅房主，且不能踢棋手
+  -- 浠呮埧涓伙紝涓斾笉鑳借涪妫嬫墜
 
   if not exists (select 1 from public.rooms
 
@@ -802,7 +776,7 @@ begin
 
 end;
 
-$function$
+$function$;
 
 CREATE OR REPLACE FUNCTION public.host_mute(code character, target uuid, mute boolean)
  RETURNS boolean
@@ -835,7 +809,7 @@ begin
 
 end;
 
-$function$
+$function$;
 
 CREATE OR REPLACE FUNCTION public.join_room(code character)
  RETURNS boolean
@@ -866,8 +840,7 @@ begin
 
 
 
-  -- 作为玩家加入空位（优先 B 位），但不改变状态
-
+  -- 浣滀负鐜╁鍔犲叆绌轰綅锛堜紭鍏?B 浣嶏級锛屼絾涓嶆敼鍙樼姸鎬?
   update public.rooms
 
   set player_b_id = uid,
@@ -882,8 +855,7 @@ begin
 
 
 
-  -- 无论如何都是房间成员（入座成功则为 player，否则 watcher）
-
+  -- 鏃犺濡備綍閮芥槸鎴块棿鎴愬憳锛堝叆搴ф垚鍔熷垯涓?player锛屽惁鍒?watcher锛?
   insert into public.room_members (room_code, user_id, role)
 
   values (code, uid, case when found then 'player' else 'watcher' end)
@@ -898,7 +870,7 @@ begin
 
 end;
 
-$function$
+$function$;
 
 CREATE OR REPLACE FUNCTION public.join_room_watcher(code character)
  RETURNS boolean
@@ -941,7 +913,7 @@ begin
 
 end;
 
-$function$
+$function$;
 
 CREATE OR REPLACE FUNCTION public.join_table(tid text)
  RETURNS boolean
@@ -990,7 +962,7 @@ begin
 
 end;
 
-$function$
+$function$;
 
 CREATE OR REPLACE FUNCTION public.kick_watcher(in_mode text, in_id text, in_target uuid)
  RETURNS boolean
@@ -1117,7 +1089,7 @@ begin
 
 end;
 
-$function$
+$function$;
 
 CREATE OR REPLACE FUNCTION public.leave_room(code character)
  RETURNS boolean
@@ -1174,7 +1146,7 @@ begin
 
 
 
-  -- 双方玩家都已退出 -> 房间销毁（成员/观众随之级联退出）
+  -- 鍙屾柟鐜╁閮藉凡閫€鍑?-> 鎴块棿閿€姣侊紙鎴愬憳/瑙備紬闅忎箣绾ц仈閫€鍑猴級
 
   if remain = 0 then
 
@@ -1190,7 +1162,7 @@ begin
 
 end;
 
-$function$
+$function$;
 
 CREATE OR REPLACE FUNCTION public.leave_table(tid text)
  RETURNS boolean
@@ -1237,7 +1209,7 @@ begin
 
 end;
 
-$function$
+$function$;
 
 CREATE OR REPLACE FUNCTION public.mark_ready(in_table_id text DEFAULT NULL::text, in_room_code character DEFAULT NULL::bpchar)
  RETURNS jsonb
@@ -1296,8 +1268,7 @@ begin
 
 
 
-  -- 必须是 A 或 B 座玩家
-
+  -- 蹇呴』鏄?A 鎴?B 搴х帺瀹?
   if uid <> a and uid <> b then
 
     raise exception 'NOT_PLAYER';
@@ -1306,8 +1277,7 @@ begin
 
 
 
-  -- 尚未初始化（如先手未写库）：补一份等待中的初始棋盘
-
+  -- 灏氭湭鍒濆鍖栵紙濡傚厛鎵嬫湭鍐欏簱锛夛細琛ヤ竴浠界瓑寰呬腑鐨勫垵濮嬫鐩?
   if gs is null or gs = '{}'::jsonb then
 
     gs := '{"flowers":[1,2,3,4,5,6],"readyA":false,"readyB":false,"status":"waiting","winnerId":null,"moves":[]}'::jsonb;
@@ -1328,20 +1298,18 @@ begin
 
 
 
-  -- 双方都准备好才开始游戏
-
+  -- 鍙屾柟閮藉噯澶囧ソ鎵嶅紑濮嬫父鎴?
   if (gs->>'readyA') = 'true' and (gs->>'readyB') = 'true' then
 
     gs := jsonb_set(gs, '{status}', 'playing'::jsonb);
 
-    gs := jsonb_set(gs, '{turnUserId}', a::text::jsonb); -- A 先手
+    gs := jsonb_set(gs, '{turnUserId}', a::text::jsonb); -- A 鍏堟墜
 
   end if;
 
 
 
-  -- 更新数据库
-
+  -- 鏇存柊鏁版嵁搴?
   if in_table_id is not null then
 
     update public.lobby_tables
@@ -1370,7 +1338,7 @@ begin
 
 end;
 
-$function$
+$function$;
 
 CREATE OR REPLACE FUNCTION public.private_room_watcher_dec()
  RETURNS trigger
@@ -1397,7 +1365,7 @@ begin
 
 end;
 
-$function$
+$function$;
 
 CREATE OR REPLACE FUNCTION public.private_room_watcher_inc()
  RETURNS trigger
@@ -1424,7 +1392,7 @@ begin
 
 end;
 
-$function$
+$function$;
 
 CREATE OR REPLACE FUNCTION public.purge_table_on_empty()
  RETURNS trigger
@@ -1437,13 +1405,12 @@ declare
 
   v_scope   text;
 
-  v_empty   boolean := false;   -- 整桌已无玩家
+  v_empty   boolean := false;   -- 鏁存宸叉棤鐜╁
 
-  v_vacated boolean := false;   -- 有座位由有人变成空，但还有人留
-
+  v_vacated boolean := false;   -- 鏈夊骇浣嶇敱鏈変汉鍙樻垚绌猴紝浣嗚繕鏈変汉鐣?
 begin
 
-  -- ---- 算 scope，并判断归零 / 腾位 ----
+  -- ---- 绠?scope锛屽苟鍒ゆ柇褰掗浂 / 鑵句綅 ----
 
   if TG_ARGV[0] = 'pve' then
 
@@ -1495,7 +1462,7 @@ begin
 
 
 
-  -- ---- 第一层：有人走、还有人留 => 本轮结束，清聊天，其余保留 ----
+  -- ---- 绗竴灞傦細鏈変汉璧般€佽繕鏈変汉鐣?=> 鏈疆缁撴潫锛屾竻鑱婂ぉ锛屽叾浣欎繚鐣?----
 
   if v_vacated and not v_empty then
 
@@ -1507,7 +1474,7 @@ begin
 
 
 
-  -- ---- 无关更新：直接放行 ----
+  -- ---- 鏃犲叧鏇存柊锛氱洿鎺ユ斁琛?----
 
   if not v_empty then
 
@@ -1517,7 +1484,7 @@ begin
 
 
 
-  -- ---- 第二层：整桌归零 => 彻底清场 ----
+  -- ---- 绗簩灞傦細鏁存褰掗浂 => 褰诲簳娓呭満 ----
 
   delete from public.chat_messages where table_id = v_scope;
 
@@ -1527,10 +1494,8 @@ begin
 
 
 
-  -- ★ 新增：本桌已归零，观众数必为 0。在这里写死，
-
-  --   后面 delete watchers 连带触发的 *_watcher_dec() 只管「跳过」即可。
-
+  -- 鈽?鏂板锛氭湰妗屽凡褰掗浂锛岃浼楁暟蹇呬负 0銆傚湪杩欓噷鍐欐锛?
+  --   鍚庨潰 delete watchers 杩炲甫瑙﹀彂鐨?*_watcher_dec() 鍙銆岃烦杩囥€嶅嵆鍙€?
   new.watcher_count := 0;
 
 
@@ -1563,7 +1528,7 @@ begin
 
 end;
 
-$function$
+$function$;
 
 CREATE OR REPLACE FUNCTION public.pve_end(tid text)
  RETURNS boolean
@@ -1598,7 +1563,7 @@ begin
 
 end;
 
-$function$
+$function$;
 
 CREATE OR REPLACE FUNCTION public.pve_finish(in_player_id uuid, in_won boolean)
  RETURNS void
@@ -1633,7 +1598,7 @@ begin
 
 end;
 
-$function$
+$function$;
 
 CREATE OR REPLACE FUNCTION public.pve_forfeit(tid text, state jsonb)
  RETURNS boolean
@@ -1696,7 +1661,7 @@ begin
 
 end;
 
-$function$
+$function$;
 
 CREATE OR REPLACE FUNCTION public.pve_heartbeat(tid text)
  RETURNS boolean
@@ -1739,7 +1704,7 @@ begin
 
 end;
 
-$function$
+$function$;
 
 CREATE OR REPLACE FUNCTION public.pve_leave(tid text)
  RETURNS boolean
@@ -1780,7 +1745,7 @@ begin
 
 end;
 
-$function$
+$function$;
 
 CREATE OR REPLACE FUNCTION public.pve_report_state(tid text, state jsonb)
  RETURNS boolean
@@ -1823,7 +1788,7 @@ begin
 
 end;
 
-$function$
+$function$;
 
 CREATE OR REPLACE FUNCTION public.pve_reset_ban_guard()
  RETURNS trigger
@@ -1889,7 +1854,7 @@ begin
 
     delete from public.pve_watchers where user_id = uid;
 
-    return true; -- 已坐在这桌，幂等
+    return true; -- 宸插潗鍦ㄨ繖妗岋紝骞傜瓑
 
   end if;
 
@@ -1925,7 +1890,7 @@ begin
 
 end;
 
-$function$
+$function$;
 
 CREATE OR REPLACE FUNCTION public.pve_sit_ban_guard()
  RETURNS trigger
@@ -1983,7 +1948,7 @@ begin
 
 end;
 
-$function$
+$function$;
 
 CREATE OR REPLACE FUNCTION public.pve_unwatch(tid text)
  RETURNS boolean
@@ -2016,7 +1981,7 @@ begin
 
 end;
 
-$function$
+$function$;
 
 CREATE OR REPLACE FUNCTION public.pve_watch(tid text)
  RETURNS boolean
@@ -2047,8 +2012,7 @@ begin
 
 
 
-  -- 已在任意桌作为玩家入座 -> 不能再观战（一人一位置）
-
+  -- 宸插湪浠绘剰妗屼綔涓虹帺瀹跺叆搴?-> 涓嶈兘鍐嶈鎴橈紙涓€浜轰竴浣嶇疆锛?
   if exists (select 1 from public.pve_tables
 
              where player_id = uid) then
@@ -2059,8 +2023,7 @@ begin
 
 
 
-  -- 换桌观战：先退旧观战，再坐新桌（唯一约束保证一人一个观众位）
-
+  -- 鎹㈡瑙傛垬锛氬厛閫€鏃ц鎴橈紝鍐嶅潗鏂版锛堝敮涓€绾︽潫淇濊瘉涓€浜轰竴涓浼椾綅锛?
   if exists (select 1 from public.pve_watchers where user_id = uid) then
 
     delete from public.pve_watchers where user_id = uid;
@@ -2081,7 +2044,7 @@ begin
 
 end;
 
-$function$
+$function$;
 
 CREATE OR REPLACE FUNCTION public.pve_watch_ban_guard()
  RETURNS trigger
@@ -2125,7 +2088,7 @@ begin
 
 end;
 
-$function$
+$function$;
 
 CREATE OR REPLACE FUNCTION public.pve_watcher_inc()
  RETURNS trigger
@@ -2152,7 +2115,7 @@ begin
 
 end;
 
-$function$
+$function$;
 
 CREATE OR REPLACE FUNCTION public.pvp_end(tid text)
  RETURNS boolean
@@ -2221,7 +2184,7 @@ begin
 
 end;
 
-$function$
+$function$;
 
 CREATE OR REPLACE FUNCTION public.pvp_heartbeat(tid text)
  RETURNS boolean
@@ -2244,10 +2207,9 @@ begin
 
 
 
-  -- 只给自己占的那个座位盖时间戳；另一个座位的时间戳不动，
+  -- 鍙粰鑷繁鍗犵殑閭ｄ釜搴т綅鐩栨椂闂存埑锛涘彟涓€涓骇浣嶇殑鏃堕棿鎴充笉鍔紝
 
-  -- 这样一个座位失联不会连带把同桌的人也算成失联。
-
+  -- 杩欐牱涓€涓骇浣嶅け鑱斾笉浼氳繛甯︽妸鍚屾鐨勪汉涔熺畻鎴愬け鑱斻€?
   update public.pvp_tables
 
   set last_active_at = now(),
@@ -2260,8 +2222,7 @@ begin
 
 
 
-  -- 观众不参与判负，心跳只刷新存活时间
-
+  -- 瑙備紬涓嶅弬涓庡垽璐燂紝蹇冭烦鍙埛鏂板瓨娲绘椂闂?
   update public.pvp_watchers
 
   set last_active_at = now()
@@ -2274,7 +2235,7 @@ begin
 
 end;
 
-$function$
+$function$;
 
 CREATE OR REPLACE FUNCTION public.pvp_kick_watcher(tid text, target uuid, ban_minutes integer)
  RETURNS boolean
@@ -2321,8 +2282,7 @@ begin
 
 
 
-  -- 鉴权：必须是本桌玩家（A 或 B）。观众之间、观众对观众一律拒绝。
-
+  -- 閴存潈锛氬繀椤绘槸鏈鐜╁锛圓 鎴?B锛夈€傝浼椾箣闂淬€佽浼楀瑙備紬涓€寰嬫嫆缁濄€?
   if a_id <> uid and (b_id is null or b_id <> uid) then
 
     raise exception 'NOT_YOUR_TABLE';
@@ -2339,10 +2299,9 @@ begin
 
 
 
-  -- 目标必须「当前确实是本桌观众」，否则不允许踢
+  -- 鐩爣蹇呴』銆屽綋鍓嶇‘瀹炴槸鏈瑙備紬銆嶏紝鍚﹀垯涓嶅厑璁歌涪
 
-  -- （顺带挡住踢玩家、踢不在场的人、重复踢）
-
+  -- 锛堥『甯︽尅浣忚涪鐜╁銆佽涪涓嶅湪鍦虹殑浜恒€侀噸澶嶈涪锛?
   if not exists (select 1 from public.pvp_watchers
 
                  where table_id = tid and user_id = target) then
@@ -2353,14 +2312,12 @@ begin
 
 
 
-  -- 禁入时长夹到 [0, 1440] 分钟，防止传进来负数或超大值
-
+  -- 绂佸叆鏃堕暱澶瑰埌 [0, 1440] 鍒嗛挓锛岄槻姝紶杩涙潵璐熸暟鎴栬秴澶у€?
   mins := least(greatest(coalesce(ban_minutes, 0), 0), 1440);
 
 
 
-  -- 记录禁入（upsert：重复踢人刷新时长而不是报主键冲突）
-
+  -- 璁板綍绂佸叆锛坲psert锛氶噸澶嶈涪浜哄埛鏂版椂闀胯€屼笉鏄姤涓婚敭鍐茬獊锛?
   insert into public.pvp_watcher_bans (table_id, user_id, banned_until, created_by)
 
   values (tid, target, now() + make_interval(mins => mins), uid)
@@ -2375,7 +2332,7 @@ begin
 
 
 
-  -- 移出观众；pvp_watcher_dec 触发器自动把 watcher_count 减 1
+  -- 绉诲嚭瑙備紬锛沺vp_watcher_dec 瑙﹀彂鍣ㄨ嚜鍔ㄦ妸 watcher_count 鍑?1
 
   delete from public.pvp_watchers where table_id = tid and user_id = target;
 
@@ -2385,7 +2342,7 @@ begin
 
 end;
 
-$function$
+$function$;
 
 CREATE OR REPLACE FUNCTION public.pvp_leave(tid text)
  RETURNS boolean
@@ -2446,27 +2403,23 @@ begin
 
 
 
-  -- winner 必须存「座位」而不是 uid：
-
-  -- 客户端 renderPvpState / buildPvpLogText 判断的是 gs.winner 是否等于自己的
-
-  -- 'a'/'b'，存 uuid 会让赢家和输家都被判成平局，且 finish_game 取不到人。
-
-  -- uid 只用于传给 finish_game。
-
+  -- winner 蹇呴』瀛樸€屽骇浣嶃€嶈€屼笉鏄?uid锛?
+  -- 瀹㈡埛绔?renderPvpState / buildPvpLogText 鍒ゆ柇鐨勬槸 gs.winner 鏄惁绛変簬鑷繁鐨?
+  -- 'a'/'b'锛屽瓨 uuid 浼氳璧㈠鍜岃緭瀹堕兘琚垽鎴愬钩灞€锛屼笖 finish_game 鍙栦笉鍒颁汉銆?
+  -- uid 鍙敤浜庝紶缁?finish_game銆?
   winner_side := case when my_side = 'a' then 'b' when my_side = 'b' then 'a' else null end;
 
   winner_uid  := case when my_side = 'a' then b_id when my_side = 'b' then a_id else null end;
 
 
 
-  -- 对局中本桌玩家退出 = 判负
+  -- 瀵瑰眬涓湰妗岀帺瀹堕€€鍑?= 鍒よ礋
 
   if cstate = 'playing' and my_side is not null and winner_uid is not null then
 
-    -- 用 || 合并而不是整体覆盖：保住 scored（结算幂等标记）与 flowers
+    -- 鐢?|| 鍚堝苟鑰屼笉鏄暣浣撹鐩栵細淇濅綇 scored锛堢粨绠楀箓绛夋爣璁帮級涓?flowers
 
-    --（棋盘快照，剩下那位屏幕上定格在判负那一刻），只清掉 moves（日志）
+    --锛堟鐩樺揩鐓э紝鍓╀笅閭ｄ綅灞忓箷涓婂畾鏍煎湪鍒よ礋閭ｄ竴鍒伙級锛屽彧娓呮帀 moves锛堟棩蹇楋級
 
     update public.pvp_tables
 
@@ -2496,10 +2449,8 @@ begin
 
 
 
-    -- 服务端立即结算，不依赖剩下那位还在轮询。
-
-    -- finish_game 内部以 game_state.scored 幂等，客户端随后那次调用是空操作。
-
+    -- 鏈嶅姟绔珛鍗崇粨绠楋紝涓嶄緷璧栧墿涓嬮偅浣嶈繕鍦ㄨ疆璇€?
+    -- finish_game 鍐呴儴浠?game_state.scored 骞傜瓑锛屽鎴风闅忓悗閭ｆ璋冪敤鏄┖鎿嶄綔銆?
     perform public.finish_game(tid, null, 'lobby', winner_uid, uid, null);
 
   end if;
@@ -2524,10 +2475,8 @@ begin
 
                     else status end,
 
-      -- 这里只在「我走之后一个座位都不剩」时才清空 game_state；
-
-      -- 若对手还在，保留上一条 UPDATE 写好的判负结果
-
+      -- 杩欓噷鍙湪銆屾垜璧颁箣鍚庝竴涓骇浣嶉兘涓嶅墿銆嶆椂鎵嶆竻绌?game_state锛?
+      -- 鑻ュ鎵嬭繕鍦紝淇濈暀涓婁竴鏉?UPDATE 鍐欏ソ鐨勫垽璐熺粨鏋?
       game_state = case
 
                      when (player_a_id = uid and player_b_id is null)
@@ -2558,7 +2507,7 @@ begin
 
 end;
 
-$function$
+$function$;
 
 CREATE OR REPLACE FUNCTION public.pvp_my_ban_seconds(tid text)
  RETURNS integer
@@ -2599,7 +2548,7 @@ begin
 
 end;
 
-$function$
+$function$;
 
 CREATE OR REPLACE FUNCTION public.pvp_ready(tid text)
  RETURNS boolean
@@ -2660,9 +2609,8 @@ begin
 
 
 
-  -- 双方就绪且不在对局中才允许开局：
-
-  --   防止对局中重复开局重置棋盘；开局即清 ready，下一局需重新准备
+  -- 鍙屾柟灏辩华涓斾笉鍦ㄥ灞€涓墠鍏佽寮€灞€锛?
+  --   闃叉瀵瑰眬涓噸澶嶅紑灞€閲嶇疆妫嬬洏锛涘紑灞€鍗虫竻 ready锛屼笅涓€灞€闇€閲嶆柊鍑嗗
 
   if a_id is not null and b_id is not null
 
@@ -2686,8 +2634,7 @@ begin
 
         current_turn_id = case when first_is_a then a_id else b_id end,
 
-        -- 「轮到 first_is_a」的那一刻起算本轮 60 秒
-
+        -- 銆岃疆鍒?first_is_a銆嶇殑閭ｄ竴鍒昏捣绠楁湰杞?60 绉?
         turn_deadline_at = now() + make_interval(secs => public.pvp_turn_seconds()),
 
         game_state = jsonb_build_object(
@@ -2716,7 +2663,7 @@ begin
 
 end;
 
-$function$
+$function$;
 
 CREATE OR REPLACE FUNCTION public.pvp_report_state(tid text, state jsonb)
  RETURNS boolean
@@ -2777,7 +2724,7 @@ begin
 
 
 
-  -- 对局中才轮次校验：不在自己回合不准改状态，也不能替对方结算
+  -- 瀵瑰眬涓墠杞鏍￠獙锛氫笉鍦ㄨ嚜宸卞洖鍚堜笉鍑嗘敼鐘舵€侊紝涔熶笉鑳芥浛瀵规柟缁撶畻
 
   if c_status = 'playing' then
 
@@ -2797,32 +2744,24 @@ begin
 
 
 
-    -- finished 分两种，靠 winner 是不是「我」区分：
+    -- finished 鍒嗕袱绉嶏紝闈?winner 鏄笉鏄€屾垜銆嶅尯鍒嗭細
 
-    --   winner = 我   -> 正常胜负（对手已无花可拿），按原样放行
+    --   winner = 鎴?  -> 姝ｅ父鑳滆礋锛堝鎵嬪凡鏃犺姳鍙嬁锛夛紝鎸夊師鏍锋斁琛?
+    --   winner = 瀵规墜 -> 鍒よ礋澹版槑銆傚鎴风鐨勮秴鏃跺€掕鏃跺氨鏄蛋杩欐潯
 
-    --   winner = 对手 -> 判负声明。客户端的超时倒计时就是走这条
+    --     锛圠ocalGameActivity:2015锛夛紝鑰岃繖鏉′互鍓嶅彧鏍￠獙銆屾垜鏄綋鍓嶅洖鍚堣€呫€嶏紝
 
-    --     （LocalGameActivity:2015），而这条以前只校验「我是当前回合者」，
+    --     鏀瑰寘灏辫兘鍦ㄤ换浣曟椂鍒诲甯冭嚜宸辫耽銆傜幇鍦ㄥ繀椤荤‘璁?deadline 鐪熺殑杩囦簡锛?
+    --     鍒よ礋鏉冩敹褰掓湇鍔＄锛歝ron锛坮eap_turn_timeouts锛夋墠鏄秴鏃跺垽璐熺殑鎵ц鑰咃紝
 
-    --     改包就能在任何时刻宣布自己赢。现在必须确认 deadline 真的过了，
-
-    --     判负权收归服务端：cron（reap_turn_timeouts）才是超时判负的执行者，
-
-    --     这里只是让客户端到点时那一次上报能立刻生效，玩家不用干等一分钟。
-
+    --     杩欓噷鍙槸璁╁鎴风鍒扮偣鏃堕偅涓€娆′笂鎶ヨ兘绔嬪埢鐢熸晥锛岀帺瀹朵笉鐢ㄥ共绛変竴鍒嗛挓銆?
     --
 
-    -- 【已知信任边界，未在本次修复】正常胜负那条仍然信客户端上报的棋盘：
-
-    -- checkGameEnd() 只是本地把 remainingFlowers[1..5] 加总看是否为 0，
-
-    -- 服务端不校验 moves，所以伪造 flowers 数组仍可提前宣布获胜。
-
-    -- 要根治得让服务端重放并校验每一步（换手权、拿花数、胜负条件），
-
-    -- 那是另一件事，不属于「60 秒回合倒计时以服务端为准」的范围。
-
+    -- 銆愬凡鐭ヤ俊浠昏竟鐣岋紝鏈湪鏈淇銆戞甯歌儨璐熼偅鏉′粛鐒朵俊瀹㈡埛绔笂鎶ョ殑妫嬬洏锛?
+    -- checkGameEnd() 鍙槸鏈湴鎶?remainingFlowers[1..5] 鍔犳€荤湅鏄惁涓?0锛?
+    -- 鏈嶅姟绔笉鏍￠獙 moves锛屾墍浠ヤ吉閫?flowers 鏁扮粍浠嶅彲鎻愬墠瀹ｅ竷鑾疯儨銆?
+    -- 瑕佹牴娌诲緱璁╂湇鍔＄閲嶆斁骞舵牎楠屾瘡涓€姝ワ紙鎹㈡墜鏉冦€佹嬁鑺辨暟銆佽儨璐熸潯浠讹級锛?
+    -- 閭ｆ槸鍙︿竴浠朵簨锛屼笉灞炰簬銆?0 绉掑洖鍚堝€掕鏃朵互鏈嶅姟绔负鍑嗐€嶇殑鑼冨洿銆?
     if state->>'status' = 'finished' and state->>'winner' <> my_side then
 
       if c_deadline is null or c_deadline > now() then
@@ -2843,9 +2782,8 @@ begin
 
 
 
-  -- and (player_a_id = uid or player_b_id = uid) 是本次新增的防护：
-
-  -- 离席后晚到的上报在这里变成空操作
+  -- and (player_a_id = uid or player_b_id = uid) 鏄湰娆℃柊澧炵殑闃叉姢锛?
+  -- 绂诲腑鍚庢櫄鍒扮殑涓婃姤鍦ㄨ繖閲屽彉鎴愮┖鎿嶄綔
 
   update public.pvp_tables
 
@@ -2863,10 +2801,8 @@ begin
 
       end,
 
-      -- 换手就把本轮 60 秒给新行动方；结束清空。deadline 存在独立列而不是
-
-      -- game_state 里，正是因为上面那句 game_state = state 是整包覆盖。
-
+      -- 鎹㈡墜灏辨妸鏈疆 60 绉掔粰鏂拌鍔ㄦ柟锛涚粨鏉熸竻绌恒€俤eadline 瀛樺湪鐙珛鍒楄€屼笉鏄?
+      -- game_state 閲岋紝姝ｆ槸鍥犱负涓婇潰閭ｅ彞 game_state = state 鏄暣鍖呰鐩栥€?
       turn_deadline_at = case
 
         when st_status = 'finished' then null
@@ -2891,25 +2827,21 @@ begin
 
     and (player_a_id = uid or player_b_id = uid)
 
-    -- 已结算过就不再覆盖。
+    -- 宸茬粨绠楄繃灏变笉鍐嶈鐩栥€?
+    -- 鍥炲悎瓒呮椂鏃?reap_turn_timeouts 鍏堝垽璐熷苟缁撶畻锛坰cored=true锛夛紝鑰岃秴鏃惰€?
+    -- 鎵嬩笂鍙兘姝ｅソ鏈変竴鎵嬪湪璺笂鐨勪笂鎶ヨ繖鏃舵墠鍒帮細c_status 宸叉槸 'seated'锛?
+    -- 涓婇潰閭ｆ杞鏍￠獙鏁村潡琚烦杩囷紝鑻ヤ笉鍔犺繖涓€鏉★紝game_state = state 浼氭妸
 
-    -- 回合超时时 reap_turn_timeouts 先判负并结算（scored=true），而超时者
+    -- finished 鍜?scored 涓€璧锋姽鎺夛紝瀵瑰眬澶嶆椿鎴?playing锛屼笖 scored 涓㈠け鍙兘瀵艰嚧
 
-    -- 手上可能正好有一手在路上的上报这时才到：c_status 已是 'seated'，
-
-    -- 上面那段轮次校验整块被跳过，若不加这一条，game_state = state 会把
-
-    -- finished 和 scored 一起抹掉，对局复活成 playing，且 scored 丢失可能导致
-
-    -- 重复计分。这和上面「离席后晚到的上报」是同一类写回竞态。
-
+    -- 閲嶅璁″垎銆傝繖鍜屼笂闈€岀甯悗鏅氬埌鐨勪笂鎶ャ€嶆槸鍚屼竴绫诲啓鍥炵珵鎬併€?
     and (game_state->>'scored') is distinct from 'true';
 
 
 
   if not found then
 
-    -- 已经离席（或被踢）、或本局已结算，这次上报直接忽略，不当作错误
+    -- 宸茬粡绂诲腑锛堟垨琚涪锛夈€佹垨鏈眬宸茬粨绠楋紝杩欐涓婃姤鐩存帴蹇界暐锛屼笉褰撲綔閿欒
 
     return true;
 
@@ -2921,7 +2853,7 @@ begin
 
 end;
 
-$function$
+$function$;
 
 CREATE OR REPLACE FUNCTION public.pvp_reset_ban_guard()
  RETURNS trigger
@@ -3029,9 +2961,9 @@ begin
 
                    end,
 
-      -- 上一局已结束就顺手清掉可能残留的截止时间（正常路径上它已被判负逻辑
+      -- 涓婁竴灞€宸茬粨鏉熷氨椤烘墜娓呮帀鍙兘娈嬬暀鐨勬埅姝㈡椂闂达紙姝ｅ父璺緞涓婂畠宸茶鍒よ礋閫昏緫
 
-      -- 置空，这里是「认输与超时判负同时到达」这类边界下的幂等保险）
+      -- 缃┖锛岃繖閲屾槸銆岃杈撲笌瓒呮椂鍒よ礋鍚屾椂鍒拌揪銆嶈繖绫昏竟鐣屼笅鐨勫箓绛変繚闄╋級
 
       turn_deadline_at = case
 
@@ -3057,7 +2989,7 @@ begin
 
 end;
 
-$function$
+$function$;
 
 CREATE OR REPLACE FUNCTION public.pvp_sit_b(tid text)
  RETURNS boolean
@@ -3170,7 +3102,7 @@ begin
 
 end;
 
-$function$
+$function$;
 
 CREATE OR REPLACE FUNCTION public.pvp_sit_ban_guard()
  RETURNS trigger
@@ -3193,7 +3125,7 @@ CREATE OR REPLACE FUNCTION public.pvp_turn_seconds()
  RETURNS integer
  LANGUAGE sql
  IMMUTABLE
-AS $function$ select 60 $function$
+AS $function$ select 60 $function$;
 
 CREATE OR REPLACE FUNCTION public.pvp_unwatch(tid text)
  RETURNS boolean
@@ -3226,7 +3158,7 @@ begin
 
 end;
 
-$function$
+$function$;
 
 CREATE OR REPLACE FUNCTION public.pvp_watch(tid text)
  RETURNS boolean
@@ -3257,7 +3189,7 @@ begin
 
 
 
-  -- 禁入校验
+  -- 绂佸叆鏍￠獙
 
   if exists (select 1 from public.pvp_watcher_bans
 
@@ -3269,8 +3201,7 @@ begin
 
 
 
-  -- 已在任意桌作为玩家入座 -> 不能再观战（一人一位置）
-
+  -- 宸插湪浠绘剰妗屼綔涓虹帺瀹跺叆搴?-> 涓嶈兘鍐嶈鎴橈紙涓€浜轰竴浣嶇疆锛?
   if exists (select 1 from public.pvp_tables
 
              where player_a_id = uid or player_b_id = uid) then
@@ -3281,7 +3212,7 @@ begin
 
 
 
-  -- 换桌观战：先退旧观战，再坐新桌
+  -- 鎹㈡瑙傛垬锛氬厛閫€鏃ц鎴橈紝鍐嶅潗鏂版
 
   if exists (select 1 from public.pvp_watchers where user_id = uid) then
 
@@ -3303,7 +3234,7 @@ begin
 
 end;
 
-$function$
+$function$;
 
 CREATE OR REPLACE FUNCTION public.pvp_watch_ban_guard()
  RETURNS trigger
@@ -3333,8 +3264,7 @@ begin
 
   if pg_trigger_depth() > 1 then
 
-    return old;   -- 连带触发：purge 已把 watcher_count 置 0，跳过即可
-
+    return old;   -- 杩炲甫瑙﹀彂锛歱urge 宸叉妸 watcher_count 缃?0锛岃烦杩囧嵆鍙?
   end if;
 
   update public.pvp_tables
@@ -3347,7 +3277,7 @@ begin
 
 end;
 
-$function$
+$function$;
 
 CREATE OR REPLACE FUNCTION public.pvp_watcher_inc()
  RETURNS trigger
@@ -3360,8 +3290,7 @@ begin
 
   if pg_trigger_depth() > 1 then
 
-    return new;   -- 连带触发：父表正被外层命令修改，不能二次改同一行
-
+    return new;   -- 杩炲甫瑙﹀彂锛氱埗琛ㄦ琚灞傚懡浠や慨鏀癸紝涓嶈兘浜屾鏀瑰悓涓€琛?
   end if;
 
   update public.pvp_tables
@@ -3374,7 +3303,7 @@ begin
 
 end;
 
-$function$
+$function$;
 
 CREATE OR REPLACE FUNCTION public.random_room_code()
  RETURNS character
@@ -3384,7 +3313,7 @@ AS $function$
 
   select lpad((floor(random() * 9000) + 1000)::text, 4, '0')::char(4)
 
-$function$
+$function$;
 
 CREATE OR REPLACE FUNCTION public.random_table_id()
  RETURNS text
@@ -3396,7 +3325,7 @@ AS $function$
 
   from generate_series(1, 6)
 
-$function$
+$function$;
 
 CREATE OR REPLACE FUNCTION public.reap_stale_seats()
  RETURNS void
@@ -3409,7 +3338,7 @@ declare
 
   r           record;
 
-  v_dead_line interval := interval '60 seconds';
+  v_dead_line interval := interval '30 seconds';
 
   v_dead_side text;
 
@@ -3421,7 +3350,7 @@ declare
 
 begin
 
-  -- ---------- 人人桌 ----------
+  -- ---------- 浜轰汉妗?----------
 
   for r in
 
@@ -3453,7 +3382,7 @@ begin
 
     if r.a_dead and r.b_dead then
 
-      -- 全员掉线：没有胜负可判，直接整桌清空
+      -- 鍏ㄥ憳鎺夌嚎锛氭病鏈夎儨璐熷彲鍒わ紝鐩存帴鏁存娓呯┖
 
       update public.pvp_tables
 
@@ -3493,7 +3422,7 @@ begin
 
 
 
-      -- 对局中才判负结算
+      -- 瀵瑰眬涓墠鍒よ礋缁撶畻
 
       if r.status = 'playing' then
 
@@ -3523,7 +3452,7 @@ begin
 
 
 
-      -- 释放失联座位（触发器此时只清聊天，观众保留）
+      -- 閲婃斁澶辫仈搴т綅锛堣Е鍙戝櫒姝ゆ椂鍙竻鑱婂ぉ锛岃浼椾繚鐣欙級
 
       update public.pvp_tables
 
@@ -3539,12 +3468,10 @@ begin
 
           ready_b = case when v_dead_side = 'b' then false else ready_b end,
 
-          -- 没有行动方就没有回合可超时。这一句和上面判负那句重复不冲突：
+          -- 娌℃湁琛屽姩鏂瑰氨娌℃湁鍥炲悎鍙秴鏃躲€傝繖涓€鍙ュ拰涓婇潰鍒よ礋閭ｅ彞閲嶅涓嶅啿绐侊細
 
-          -- 上面管 playing 分支，这里管 seated 分支（本来就没在走棋，
-
-          -- 但可能残留着上一局的 deadline，reap_turn_timeouts 会拿它误判）。
-
+          -- 涓婇潰绠?playing 鍒嗘敮锛岃繖閲岀 seated 鍒嗘敮锛堟湰鏉ュ氨娌″湪璧版锛?
+          -- 浣嗗彲鑳芥畫鐣欑潃涓婁竴灞€鐨?deadline锛宺eap_turn_timeouts 浼氭嬁瀹冭鍒わ級銆?
           turn_deadline_at = null,
 
           status = 'seated',
@@ -3559,7 +3486,7 @@ begin
 
 
 
-  -- ---------- 私密房间（口径相同，积分为 +10/-2） ----------
+  -- ---------- 绉佸瘑鎴块棿锛堝彛寰勭浉鍚岋紝绉垎涓?+10/-2锛?----------
 
   for r in
 
@@ -3683,32 +3610,22 @@ begin
 
 
 
-  -- ---------- 单边占座：一个人走了/崩了，另一个人还赖在座位上 ----------
+  -- ---------- 鍗曡竟鍗犲骇锛氫竴涓汉璧颁簡/宕╀簡锛屽彟涓€涓汉杩樿禆鍦ㄥ骇浣嶄笂 ----------
 
-  -- 上面两个循环都要求「两个座位都有人」，所以这种表一个都扫不到。
-
-  -- 这正是「有人退不出桌子、桌上一直挂着上一局 finished」的来源：
-
-  -- 对手走了以后 pvp_leave 把 status 留在 seated，
-
-  -- 而回收器因为少了一个人而永远不碰它。
-
+  -- 涓婇潰涓や釜寰幆閮借姹傘€屼袱涓骇浣嶉兘鏈変汉銆嶏紝鎵€浠ヨ繖绉嶈〃涓€涓兘鎵笉鍒般€?
+  -- 杩欐鏄€屾湁浜洪€€涓嶅嚭妗屽瓙銆佹涓婁竴鐩存寕鐫€涓婁竴灞€ finished銆嶇殑鏉ユ簮锛?
+  -- 瀵规墜璧颁簡浠ュ悗 pvp_leave 鎶?status 鐣欏湪 seated锛?
+  -- 鑰屽洖鏀跺櫒鍥犱负灏戜簡涓€涓汉鑰屾案杩滀笉纰板畠銆?
   --
 
-  -- 只在「唯一占座者自己也停了心跳」时才动，所以活人不会被误清：
-
-  -- 他在 App 里就一直在发心跳，last_*_at 永远是新的。
-
-  -- 被冻/被杀/弱网断了才会落到这里。
-
+  -- 鍙湪銆屽敮涓€鍗犲骇鑰呰嚜宸变篃鍋滀簡蹇冭烦銆嶆椂鎵嶅姩锛屾墍浠ユ椿浜轰笉浼氳璇竻锛?
+  -- 浠栧湪 App 閲屽氨涓€鐩村湪鍙戝績璺筹紝last_*_at 姘歌繙鏄柊鐨勩€?
+  -- 琚喕/琚潃/寮辩綉鏂簡鎵嶄細钀藉埌杩欓噷銆?
   --
 
-  -- 对手已经不在，没有胜负可判，也不计分 —— 单纯把座位放掉。
-
-  -- game_state 一起清空：残留的上一局 finished/winner 会让下一个进来
-
-  -- 的人先看到上一局的结果。
-
+  -- 瀵规墜宸茬粡涓嶅湪锛屾病鏈夎儨璐熷彲鍒わ紝涔熶笉璁″垎 鈥斺€?鍗曠函鎶婂骇浣嶆斁鎺夈€?
+  -- game_state 涓€璧锋竻绌猴細娈嬬暀鐨勪笂涓€灞€ finished/winner 浼氳涓嬩竴涓繘鏉?
+  -- 鐨勪汉鍏堢湅鍒颁笂涓€灞€鐨勭粨鏋溿€?
   for r in
 
     select t.id, t.player_a_id, t.player_b_id,
@@ -3763,7 +3680,7 @@ begin
 
 
 
-  -- 私密房同一口径
+  -- 绉佸瘑鎴垮悓涓€鍙ｅ緞
 
   for r in
 
@@ -3819,7 +3736,7 @@ begin
 
 end;
 
-$function$
+$function$;
 
 CREATE OR REPLACE FUNCTION public.reap_turn_timeouts()
  RETURNS void
@@ -3842,7 +3759,7 @@ declare
 
 begin
 
-  -- ---------- 人人桌 ----------
+  -- ---------- 浜轰汉妗?----------
 
   for r in
 
@@ -3860,7 +3777,7 @@ begin
 
        and t.turn_deadline_at < now()
 
-       -- 对手心跳必须在 60 秒内，否则交给 reap_stale_seats 整桌清空
+       -- 瀵规墜蹇冭烦蹇呴』鍦?60 绉掑唴锛屽惁鍒欎氦缁?reap_stale_seats 鏁存娓呯┖
 
        and case when t.current_turn_id = t.player_a_id
 
@@ -3886,12 +3803,9 @@ begin
 
 
 
-    -- status / current_turn_id / turn_deadline_at 都放进 WHERE：
-
-    -- 客户端可能刚好在这期间落了子换了手，重评估后条件不成立 -> 空操作。
-
-    -- 只判「本轮开始时轮到的那个人的 deadline 已过」，不判行数变化。
-
+    -- status / current_turn_id / turn_deadline_at 閮芥斁杩?WHERE锛?
+    -- 瀹㈡埛绔彲鑳藉垰濂藉湪杩欐湡闂磋惤浜嗗瓙鎹簡鎵嬶紝閲嶈瘎浼板悗鏉′欢涓嶆垚绔?-> 绌烘搷浣溿€?
+    -- 鍙垽銆屾湰杞紑濮嬫椂杞埌鐨勯偅涓汉鐨?deadline 宸茶繃銆嶏紝涓嶅垽琛屾暟鍙樺寲銆?
     update public.pvp_tables
 
     set game_state = coalesce(game_state, '{}'::jsonb) || jsonb_build_object(
@@ -3932,7 +3846,7 @@ begin
 
 
 
-  -- ---------- 私密房间（口径相同，积分为 +10/-2） ----------
+  -- ---------- 绉佸瘑鎴块棿锛堝彛寰勭浉鍚岋紝绉垎涓?+10/-2锛?----------
 
   for r in
 
@@ -4014,7 +3928,7 @@ begin
 
 end;
 
-$function$
+$function$;
 
 CREATE OR REPLACE FUNCTION public.request_turn_timeout_check(p_table_id text DEFAULT NULL::text, p_room_code character DEFAULT NULL::bpchar)
  RETURNS boolean
@@ -4037,10 +3951,8 @@ begin
 
 
 
-  -- 先只读地确认「这局确实到期且该判」，拿不到就不写。
-
-  -- 与 reap_turn_timeouts 的筛选条件保持一致，避免两条路径口径不同。
-
+  -- 鍏堝彧璇诲湴纭銆岃繖灞€纭疄鍒版湡涓旇鍒ゃ€嶏紝鎷夸笉鍒板氨涓嶅啓銆?
+  -- 涓?reap_turn_timeouts 鐨勭瓫閫夋潯浠朵繚鎸佷竴鑷达紝閬垮厤涓ゆ潯璺緞鍙ｅ緞涓嶅悓銆?
   if p_table_id is not null then
 
     select exists (
@@ -4101,17 +4013,16 @@ begin
 
 
 
-  -- 条件成立，交给唯一的判负实现去写（它内部还会按 current_turn_id 重新
+  -- 鏉′欢鎴愮珛锛屼氦缁欏敮涓€鐨勫垽璐熷疄鐜板幓鍐欙紙瀹冨唴閮ㄨ繕浼氭寜 current_turn_id 閲嶆柊
 
-  -- 校验一次，所以这里不存在 TOCTOU：并发换手时那次 update 会落空）。
-
+  -- 鏍￠獙涓€娆★紝鎵€浠ヨ繖閲屼笉瀛樺湪 TOCTOU锛氬苟鍙戞崲鎵嬫椂閭ｆ update 浼氳惤绌猴級銆?
   perform public.reap_turn_timeouts();
 
   return true;
 
 end;
 
-$function$
+$function$;
 
 CREATE OR REPLACE FUNCTION public.reset_room_status(code character)
  RETURNS boolean
@@ -4136,7 +4047,7 @@ begin
 
 
 
-  -- 检查是否是房主
+  -- 妫€鏌ユ槸鍚︽槸鎴夸富
 
   select host_id = uid into is_host
 
@@ -4156,8 +4067,7 @@ begin
 
 
 
-  -- 重置房间状态到等待状态
-
+  -- 閲嶇疆鎴块棿鐘舵€佸埌绛夊緟鐘舵€?
   update public.rooms
 
   set status = 'waiting',
@@ -4174,7 +4084,7 @@ begin
 
 end;
 
-$function$
+$function$;
 
 CREATE OR REPLACE FUNCTION public.reset_watcher_kick(in_mode text, in_id text)
  RETURNS void
@@ -4201,7 +4111,7 @@ begin
 
 end;
 
-$function$
+$function$;
 
 CREATE OR REPLACE FUNCTION public.rls_auto_enable()
  RETURNS event_trigger
@@ -4231,7 +4141,7 @@ BEGIN
      END IF;
   END LOOP;
 END;
-$function$
+$function$;
 
 CREATE OR REPLACE FUNCTION public.room_create()
  RETURNS character
@@ -4276,7 +4186,7 @@ begin
 
 end;
 
-$function$
+$function$;
 
 CREATE OR REPLACE FUNCTION public.room_end(code character)
  RETURNS boolean
@@ -4347,7 +4257,7 @@ begin
 
 end;
 
-$function$
+$function$;
 
 CREATE OR REPLACE FUNCTION public.room_heartbeat(code character)
  RETURNS boolean
@@ -4394,7 +4304,7 @@ begin
 
 end;
 
-$function$
+$function$;
 
 CREATE OR REPLACE FUNCTION public.room_join(code character)
  RETURNS boolean
@@ -4431,7 +4341,7 @@ begin
 
 end;
 
-$function$
+$function$;
 
 CREATE OR REPLACE FUNCTION public.room_kick_watcher(code character, target uuid, ban_minutes integer)
  RETURNS boolean
@@ -4522,7 +4432,7 @@ begin
 
 
 
-  -- private_room_watcher_dec 触发器自动把 watcher_count 减 1
+  -- private_room_watcher_dec 瑙﹀彂鍣ㄨ嚜鍔ㄦ妸 watcher_count 鍑?1
 
   delete from public.private_room_watchers
 
@@ -4534,7 +4444,7 @@ begin
 
 end;
 
-$function$
+$function$;
 
 CREATE OR REPLACE FUNCTION public.room_leave(code character)
  RETURNS boolean
@@ -4593,7 +4503,7 @@ begin
 
   my_side := case when a_id = uid then 'a' when b_id = uid then 'b' else null end;
 
-  -- 同 pvp_leave：winner 存座位，uid 只给 finish_game
+  -- 鍚?pvp_leave锛歸inner 瀛樺骇浣嶏紝uid 鍙粰 finish_game
 
   winner_side := case when my_side = 'a' then 'b' when my_side = 'b' then 'a' else null end;
 
@@ -4601,7 +4511,7 @@ begin
 
 
 
-  -- 对局中本房玩家退出 = 判负
+  -- 瀵瑰眬涓湰鎴跨帺瀹堕€€鍑?= 鍒よ礋
 
   if cstate = 'playing' and my_side is not null and winner_uid is not null then
 
@@ -4679,8 +4589,7 @@ begin
 
 
 
-  -- 只有整桌没人了才清空观战名单（还有人留在房里等对手时，观战位保留）
-
+  -- 鍙湁鏁存娌′汉浜嗘墠娓呯┖瑙傛垬鍚嶅崟锛堣繕鏈変汉鐣欏湪鎴块噷绛夊鎵嬫椂锛岃鎴樹綅淇濈暀锛?
   select player_a_id, player_b_id into a_id, b_id
 
   from public.private_rooms where room_code = code;
@@ -4701,7 +4610,7 @@ begin
 
 end;
 
-$function$
+$function$;
 
 CREATE OR REPLACE FUNCTION public.room_my_ban_seconds(code character)
  RETURNS integer
@@ -4742,7 +4651,7 @@ begin
 
 end;
 
-$function$
+$function$;
 
 CREATE OR REPLACE FUNCTION public.room_ready(code character)
  RETURNS boolean
@@ -4803,7 +4712,7 @@ begin
 
 
 
-  -- 双方就绪且不在对局中才允许开局
+  -- 鍙屾柟灏辩华涓斾笉鍦ㄥ灞€涓墠鍏佽寮€灞€
 
   if a_id is not null and b_id is not null
 
@@ -4855,7 +4764,7 @@ begin
 
 end;
 
-$function$
+$function$;
 
 CREATE OR REPLACE FUNCTION public.room_report_state(code character, state jsonb)
  RETURNS boolean
@@ -4916,8 +4825,7 @@ begin
 
 
 
-  -- 对局中才轮次校验。判负声明必须核对 deadline，理由同 pvp_report_state。
-
+  -- 瀵瑰眬涓墠杞鏍￠獙銆傚垽璐熷０鏄庡繀椤绘牳瀵?deadline锛岀悊鐢卞悓 pvp_report_state銆?
   if c_status = 'playing' then
 
     my_side := case when a_id = uid then 'a' when b_id = uid then 'b' else null end;
@@ -4994,20 +4902,17 @@ begin
 
     and (player_a_id = uid or player_b_id = uid)
 
-    -- 已结算过就不再覆盖，理由同 pvp_report_state：
+    -- 宸茬粨绠楄繃灏变笉鍐嶈鐩栵紝鐞嗙敱鍚?pvp_report_state锛?
+    -- reap_turn_timeouts 鍒よ礋缁撶畻鍚庯紝瓒呮椂鑰呮墜涓婂湪閫旂殑 ongoing 涓婃姤浼氳蛋鍒拌繖閲岋紝
 
-    -- reap_turn_timeouts 判负结算后，超时者手上在途的 ongoing 上报会走到这里，
-
-    -- 不挡住就会把 finished / scored 抹掉并把桌子改回 playing。
-
+    -- 涓嶆尅浣忓氨浼氭妸 finished / scored 鎶规帀骞舵妸妗屽瓙鏀瑰洖 playing銆?
     and (game_state->>'scored') is distinct from 'true';
 
 
 
   if not found then
 
-    -- 已经离席（或被踢）、或本局已结算
-
+    -- 宸茬粡绂诲腑锛堟垨琚涪锛夈€佹垨鏈眬宸茬粨绠?
     return true;
 
   end if;
@@ -5018,7 +4923,7 @@ begin
 
 end;
 
-$function$
+$function$;
 
 CREATE OR REPLACE FUNCTION public.room_reset_ban_guard()
  RETURNS trigger
@@ -5080,8 +4985,7 @@ begin
 
 
 
-  -- 已经在房里且已占某一座
-
+  -- 宸茬粡鍦ㄦ埧閲屼笖宸插崰鏌愪竴搴?
   if a_id = uid then
 
     delete from public.private_room_watchers where user_id = uid;
@@ -5100,7 +5004,7 @@ begin
 
 
 
-  -- 每人一次一座（玩家位或观众位）
+  -- 姣忎汉涓€娆′竴搴э紙鐜╁浣嶆垨瑙備紬浣嶏級
 
   select exists (select 1 from public.private_rooms
 
@@ -5214,7 +5118,7 @@ begin
 
 end;
 
-$function$
+$function$;
 
 CREATE OR REPLACE FUNCTION public.room_sit_ban_guard()
  RETURNS trigger
@@ -5264,7 +5168,7 @@ begin
 
 end;
 
-$function$
+$function$;
 
 CREATE OR REPLACE FUNCTION public.room_watch(code character)
  RETURNS boolean
@@ -5295,7 +5199,7 @@ begin
 
 
 
-  -- 禁入校验
+  -- 绂佸叆鏍￠獙
 
   if exists (select 1 from public.private_room_watcher_bans
 
@@ -5307,8 +5211,7 @@ begin
 
 
 
-  -- 已在任意房间作为玩家入座 -> 不能再观战（一人一位置）
-
+  -- 宸插湪浠绘剰鎴块棿浣滀负鐜╁鍏ュ骇 -> 涓嶈兘鍐嶈鎴橈紙涓€浜轰竴浣嶇疆锛?
   if exists (select 1 from public.private_rooms
 
              where player_a_id = uid or player_b_id = uid) then
@@ -5319,8 +5222,7 @@ begin
 
 
 
-  -- 换房间观战：先退旧观战，再坐新房间
-
+  -- 鎹㈡埧闂磋鎴橈細鍏堥€€鏃ц鎴橈紝鍐嶅潗鏂版埧闂?
   if exists (select 1 from public.private_room_watchers where user_id = uid) then
 
     delete from public.private_room_watchers where user_id = uid;
@@ -5341,7 +5243,7 @@ begin
 
 end;
 
-$function$
+$function$;
 
 CREATE OR REPLACE FUNCTION public.room_watch_ban_guard()
  RETURNS trigger
@@ -5387,8 +5289,7 @@ begin
 
 
 
-  -- 以 game_state.scored 认领这一局：谁先到谁结算，后到的自动变空操作
-
+  -- 浠?game_state.scored 璁ら杩欎竴灞€锛氳皝鍏堝埌璋佺粨绠楋紝鍚庡埌鐨勮嚜鍔ㄥ彉绌烘搷浣?
   if in_room_type = 'private' and in_room_code is not null then
 
     update public.private_rooms
@@ -5475,7 +5376,7 @@ begin
 
 end;
 
-$function$
+$function$;
 
 CREATE OR REPLACE FUNCTION public.sit_lobby_table(tid text)
  RETURNS text
@@ -5500,8 +5401,7 @@ begin
 
 
 
-  -- 已在该桌的玩家直接返回其座位（重进/断线恢复）
-
+  -- 宸插湪璇ユ鐨勭帺瀹剁洿鎺ヨ繑鍥炲叾搴т綅锛堥噸杩?鏂嚎鎭㈠锛?
   select case
 
            when player_a_id = uid then 'a'
@@ -5526,8 +5426,7 @@ begin
 
 
 
-  -- 坐 A 位
-
+  -- 鍧?A 浣?
   update public.lobby_tables
 
   set player_a_id = uid,
@@ -5546,8 +5445,7 @@ begin
 
 
 
-  -- 坐 B 位
-
+  -- 鍧?B 浣?
   update public.lobby_tables
 
   set player_b_id = uid,
@@ -5576,7 +5474,7 @@ begin
 
 end;
 
-$function$
+$function$;
 
 CREATE OR REPLACE FUNCTION public.sit_room(code character)
  RETURNS text
@@ -5605,8 +5503,7 @@ begin
 
 
 
-  -- 获取当前房间状态
-
+  -- 鑾峰彇褰撳墠鎴块棿鐘舵€?
   select player_a_id, player_b_id into a, b
 
   from public.rooms 
@@ -5621,8 +5518,7 @@ begin
 
   if a is null and b is null then
 
-    -- 空房：坐 A 位（房主）
-
+    -- 绌烘埧锛氬潗 A 浣嶏紙鎴夸富锛?
     update public.rooms
 
     set player_a_id = uid,
@@ -5637,8 +5533,7 @@ begin
 
     
 
-    -- 添加到成员列表
-
+    -- 娣诲姞鍒版垚鍛樺垪琛?
     insert into public.room_members (room_code, user_id, role)
 
     values (code, uid, 'player')
@@ -5649,8 +5544,7 @@ begin
 
   elsif a is not null and b is null and a <> uid then
 
-    -- A 被占，B 位空：坐 B 位
-
+    -- A 琚崰锛孊 浣嶇┖锛氬潗 B 浣?
     update public.rooms
 
     set player_b_id = uid,
@@ -5665,8 +5559,7 @@ begin
 
     
 
-    -- 添加到成员列表
-
+    -- 娣诲姞鍒版垚鍛樺垪琛?
     insert into public.room_members (room_code, user_id, role)
 
     values (code, uid, 'player')
@@ -5677,7 +5570,7 @@ begin
 
   elsif a = uid and b is null then
 
-    -- 已经在 A 位，尝试重复入座
+    -- 宸茬粡鍦?A 浣嶏紝灏濊瘯閲嶅鍏ュ骇
 
     seat := 'a';
 
@@ -5685,7 +5578,7 @@ begin
 
   elsif b = uid and a is not null then
 
-    -- 已经在 B 位，尝试重复入座
+    -- 宸茬粡鍦?B 浣嶏紝灏濊瘯閲嶅鍏ュ骇
 
     seat := 'b';
 
@@ -5693,7 +5586,7 @@ begin
 
   else
 
-    -- 已满或者是自己
+    -- 宸叉弧鎴栬€呮槸鑷繁
 
     raise exception 'SEAT_UNAVAILABLE';
 
@@ -5705,7 +5598,7 @@ begin
 
 end;
 
-$function$
+$function$;
 
 CREATE OR REPLACE FUNCTION public.turn_secs_left(p_table_id text DEFAULT NULL::text, p_room_code character DEFAULT NULL::bpchar)
  RETURNS integer
@@ -5750,7 +5643,7 @@ begin
 
 end;
 
-$function$
+$function$;
 
 CREATE OR REPLACE FUNCTION public.unwatch_lobby_table(tid text)
  RETURNS boolean
@@ -5793,7 +5686,7 @@ begin
 
 end;
 
-$function$
+$function$;
 
 CREATE OR REPLACE FUNCTION public.update_game_state(in_table_id text DEFAULT NULL::text, in_room_code character DEFAULT NULL::bpchar, new_state jsonb DEFAULT '{}'::jsonb)
  RETURNS jsonb
@@ -5876,7 +5769,7 @@ begin
 
 end;
 
-$function$
+$function$;
 
 CREATE OR REPLACE FUNCTION public.watch_lobby_table(tid text)
  RETURNS boolean
@@ -5919,7 +5812,7 @@ begin
 
 end;
 
-$function$
+$function$;
 
 drop trigger if exists "private_room_watchers_dec" on "public"."private_room_watchers";
 CREATE TRIGGER private_room_watchers_dec AFTER DELETE ON public.private_room_watchers FOR EACH ROW EXECUTE FUNCTION private_room_watcher_dec();
@@ -6023,6 +5916,7 @@ grant INSERT on "public"."chat_messages" to authenticated;
 grant REFERENCES on "public"."chat_messages" to authenticated;
 grant SELECT on "public"."chat_messages" to authenticated;
 grant TRIGGER on "public"."chat_messages" to authenticated;
+
 grant TRUNCATE on "public"."chat_messages" to authenticated;
 grant UPDATE on "public"."chat_messages" to authenticated;
 grant DELETE on "public"."chat_messages" to postgres;
@@ -6413,6 +6307,25 @@ grant UPDATE on "public"."rooms" to service_role;
 --   Supabase-managed and would collide on a fresh project.
 -- --------------------------------------------------------------------------
 
+CREATE OR REPLACE FUNCTION public.handle_new_user()
+ RETURNS trigger
+ LANGUAGE plpgsql
+ SECURITY DEFINER
+ SET search_path TO 'public'
+AS $function$
+
+begin
+
+  insert into public.profiles (id) values (new.id)
+
+  on conflict (id) do nothing;
+
+  return new;
+
+end;
+
+$function$;
+
 drop trigger if exists on_auth_user_created on auth.users;
 create trigger on_auth_user_created
   after insert on auth.users
@@ -6430,6 +6343,10 @@ create trigger on_auth_user_created
 -- --------------------------------------------------------------------------
 
 drop function if exists public.room_leave(character);
+
+-- 热修复：只重写 public.room_leave 这一个函数
+-- 用法：Supabase SQL Editor -> 全选粘贴 -> Run
+-- 可以安全重复执行（create or replace）
 
 create or replace function public.room_leave(code char(4))
 returns boolean
@@ -6460,11 +6377,9 @@ begin
   end if;
 
   my_side := case when a_id = uid then 'a' when b_id = uid then 'b' else null end;
-  -- 同 pvp_leave：winner 存座位，uid 只给 finish_game
   winner_side := case when my_side = 'a' then 'b' when my_side = 'b' then 'a' else null end;
   winner_uid  := case when my_side = 'a' then b_id when my_side = 'b' then a_id else null end;
 
-  -- 对局中本房玩家退出 = 判负
   if cstate = 'playing' and my_side is not null and winner_uid is not null then
     update public.private_rooms
     set game_state = coalesce(game_state, '{}'::jsonb) || jsonb_build_object(
@@ -6490,10 +6405,6 @@ begin
       last_b_at   = case when player_b_id = uid then null else last_b_at end,
       ready_a = case when player_a_id = uid then false else ready_a end,
       ready_b = case when player_b_id = uid then false else ready_b end,
-      -- 判断 NULL 必须写 is null，写 = null 条件永远为假。
-      -- 另外 Postgres 的 SET 右侧全部按【旧行值】求值，所以不能直接问
-      -- "两人是不是都空了"——离开者本来就占着一个位（见下方 where）。
-      -- "这桌没人了" 的正确判据：每个位要么本来就空，要么就是离开者本人。
       status = case when (player_a_id is null or player_a_id = uid)
                      and (player_b_id is null or player_b_id = uid)
                     then 'open' else status end,
@@ -6508,7 +6419,6 @@ begin
       last_active_at = now()
   where room_code = code and (player_a_id = uid or player_b_id = uid);
 
-  -- 只有整桌没人了才清空观战名单（还有人留在房里等对手时，观战位保留）
   select player_a_id, player_b_id into a_id, b_id
   from public.private_rooms where room_code = code;
   if a_id is null and b_id is null then
@@ -6743,5 +6653,3 @@ begin
       v_expected, v_found;
   end if;
 end $$;
-
--- bootstrap finished.
