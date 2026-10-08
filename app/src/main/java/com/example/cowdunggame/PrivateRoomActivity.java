@@ -388,22 +388,10 @@ public class PrivateRoomActivity extends Activity {
 
     @Override
     public void onBackPressed() {
-        new Thread(new Runnable() {
-            @Override
-            public void run() {
-                try {
-                    if (client != null && roomCode != null) {
-                        client.roomLeave(roomCode);
-                    }
-                } catch (Exception ignore) {}
-                runOnUiThread(new Runnable() {
-                    @Override
-                    public void run() {
-                        PrivateRoomActivity.super.onBackPressed();
-                    }
-                });
-            }
-        }).start();
+        // 离房写库交给 onDestroy 的 roomLeave（同样异步），这里绝不等网络：
+        // 之前在这里开线程等 roomLeave 返回才 super，网络一抖
+        // 返回键就像卡死了一样按不动，连按还会堆好几个线程。
+        super.onBackPressed();
     }
 
     @Override

@@ -78,6 +78,7 @@ public class LocalGameActivity extends Activity {
     private String roomCode;
     private LinearLayout logLayout;
     private boolean leavingTable = false; // 防止返回键重复触发离桌
+    private boolean leaveResent = false;  // 离桌第一轮全失败后只自动补发一轮
 
     // 观战模式：真实玩家信息（从数据库拉取，替代本地昵称）
     private boolean isWatcher = false;
@@ -706,7 +707,7 @@ public class LocalGameActivity extends Activity {
         // 首次轮询若因入座写入尚未可见而读到 null，锁死会让后入座的人永远被当成左侧。
         String uid = client != null ? client.getUserId() : null;
         String sideNow = SeatManager.mySide(table, uid);
-        if (!sideNow.equals(mySide)) {
+        if (sideNow == null ? mySide != null : !sideNow.equals(mySide)) {
             Log.d("SeatDebug", "mySide " + mySide + " -> " + sideNow
                     + " uid=" + uid
                     + " a_id=" + table.optString("player_a_id", "<null>")
@@ -2297,23 +2298,13 @@ public class LocalGameActivity extends Activity {
         watchHandler.removeCallbacksAndMessages(null);
         stopChat();
         seatManager.stopHeartbeat();
-        if (isPvp || isRoom) {
-            // 人人桌/私密房间：退出后服务端自动判对方胜并释放座位
-            if (isRoom) {
-                seatManager.roomLeave(tableNo, null);
-            } else {
-                seatManager.pvpLeave(tableNo, null);
-            }
-            // 这里不再补一次 reportPvpState("finished", 对手)：
-            // pvp_leave / room_leave 服务端已经写好 finished 并立即结算，
-            // 那次上报是纯冗余。而且它和 leave 并发发出，谁先到不确定 ——
-            // 要是它先到，report_state 会看到「未超时的判负声明」而按
-            // NOT_EXPIRED 拒绝（见 fix_round_lifecycle.sql 的回合判负校验）。
-            // 退出判负只由 leave 一个入口负责，没有第二条路。
-        } else {
-            final JSONObject finalState = buildFinalState();
-            seatManager.forfeitAndLeave(tableNo, finalState, null);
-        }
+        // 这里不再补一次 reportPvpState("finished", 对手)：
+        // pvp_leave / room_leave 服务端已经写好 finished 并立即结算，
+        // 那次上报是纯冗余。而且它和 leave 并发发出，谁先到不确定 ——
+        // 要是它先到，report_state 会看到「未超时的判负声明」而按
+        // NOT_EXPIRED 拒绝（见 fix_round_lifecycle.sql 的回合判负校验）。
+        // 退出判负只由 leave 一个入口负责，没有第二条路。
+        sendLeaveRpc(true, buildFinalState(), true);
         addLog("你中途退出了棋局，判定为输");
         finishOrHome();
     }
@@ -2326,26 +2317,46 @@ public class LocalGameActivity extends Activity {
         watchHandler.removeCallbacksAndMessages(null);
         stopChat();
         seatManager.stopHeartbeat();
+        sendLeaveRpc(false, null, true);
+        finishOrHome();
+    }
+
+    // 统一发离桌 / 退观战请求。请求本身在后台线程带 4 次退避重试；
+    // 仍全部失败时（回调 ok=false）再补发一轮，避免服务端座位一直不释放
+    // 要干等回收器。界面不等网络：发完就 finish，失败自动补发。
+    private void sendLeaveRpc(final boolean forfeit, final JSONObject finalState,
+                              final boolean allowRetry) {
+        final SeatManager.ResultCallback cb = new SeatManager.ResultCallback() {
+            @Override
+            public void onResult(boolean ok, String message) {
+                Log.d("SeatDebug", "leave ok=" + ok + " msg=" + message
+                        + " forfeit=" + forfeit + " allowRetry=" + allowRetry);
+                if (ok || !allowRetry || leaveResent || seatManager == null) return;
+                leaveResent = true;
+                sendLeaveRpc(forfeit, finalState, false);
+            }
+        };
         if (isPvp || isRoom) {
             if (isWatcher) {
                 if (isRoom) {
-                    seatManager.roomUnwatch(tableNo, null);
+                    seatManager.roomUnwatch(tableNo, cb);
                 } else {
-                    seatManager.pvpLeaveWatch(tableNo, null);
+                    seatManager.pvpLeaveWatch(tableNo, cb);
                 }
             } else {
                 if (isRoom) {
-                    seatManager.roomLeave(tableNo, null);
+                    seatManager.roomLeave(tableNo, cb);
                 } else {
-                    seatManager.pvpLeave(tableNo, null);
+                    seatManager.pvpLeave(tableNo, cb);
                 }
             }
         } else if (isWatcher) {
-            seatManager.leaveWatch(tableNo, null);
+            seatManager.leaveWatch(tableNo, cb);
+        } else if (forfeit) {
+            seatManager.forfeitAndLeave(tableNo, finalState, cb);
         } else {
-            seatManager.leaveSeat(tableNo, null);
+            seatManager.leaveSeat(tableNo, cb);
         }
-        finishOrHome();
     }
 
     // 组装判定为输时的最终棋局状态（含当前棋盘与落子记录）
@@ -2957,6 +2968,18 @@ public class LocalGameActivity extends Activity {
         }
         if (seatManager != null) {
             seatManager.resumeHeartbeat();
+            // 观战行会被服务端「3 分钟无心跳」清掉，而心跳恢复只 UPDATE 不补插，
+            // 回前台后我就成了没有行的幽灵观众：观众数、观众列表里都没有我。
+            // 这里补一次观战 RPC（幂等：退旧坐新）；被踢/已是玩家会失败，忽略即可。
+            if (isWatcher && tableNo != null && !tableNo.isEmpty()) {
+                if (isRoom) {
+                    seatManager.roomWatch(tableNo, null);
+                } else if (isPvp) {
+                    seatManager.pvpSitAsWatcher(tableNo, null);
+                } else {
+                    seatManager.sitAsWatcher(tableNo, null);
+                }
+            }
         }
     }
 

@@ -6,6 +6,7 @@ package com.example.cowdunggame;
 
 import android.content.Context;
 import android.content.SharedPreferences;
+import android.util.Log;
 
 import org.json.JSONArray;
 import org.json.JSONObject;
@@ -546,6 +547,10 @@ public class SupabaseClient {
             }
             JSONArray watchers = getArray(base() + "/rest/v1/" + table
                     + "?select=user_id&" + filter);
+            // 诊断：观众列表只显示一部分时，靠这三个数判断丢在哪一级
+            //（rows=-1 查询失败 / ids 少了在观战表 / profiles 少了在资料表）
+            Log.d("WatcherList", mode + "/" + idOrCode
+                    + " rows=" + (watchers == null ? -1 : watchers.length()));
             if (watchers == null || watchers.length() == 0) return result;
             List<String> ids = new ArrayList<>();
             for (int i = 0; i < watchers.length(); i++) {
@@ -563,6 +568,8 @@ public class SupabaseClient {
             JSONArray profs = getArray(base() + "/rest/v1/profiles"
                     + "?select=id,nickname,gender,score,wins,losses,total_games"
                     + "&id=in.(" + inIds + ")");
+            Log.d("WatcherList", "ids=" + ids
+                    + " profiles=" + (profs == null ? -1 : profs.length()));
             if (profs == null) return result;
             // PostgREST 的 in.() 返回顺序不保证，必须按 id 关联，不能按下标对齐
             java.util.Map<String, WatcherInfo> byId = new java.util.HashMap<>();
@@ -586,6 +593,7 @@ public class SupabaseClient {
                 WatcherInfo w = byId.get(uid);
                 if (w != null) result.add(w);
             }
+            Log.d("WatcherList", "out=" + result.size());
         } catch (Exception ignore) {
         }
         return result;
