@@ -1,13 +1,20 @@
 -- hotfix_leave_guard.sql
--- 修复「后退出玩家退不出去」：pvp_leave / room_leave 的缺席守卫把
--- 「对手先走、a_id 已为空」的合法场景误判成 TABLE_NOT_FOUND / ROOM_NOT_FOUND，
--- 提前 return，导致后离开者的座位永远清不掉。
---   a_id 为空 且 b_id 也空 才算真的不存在；只有一侧为空是正常状态。
--- 判负逻辑不动：判负只属于「先走的人」（对局中退出走 finish_game），
--- 后走的人进来时 status 已是 seated，判负块天然被跳过。
--- 用法：Supabase SQL Editor -> 全选粘贴 -> Run。可安全重复执行。
+-- 修复「后退出玩家退不出去」
+--
+-- 根因：pvp_leave / room_leave 的缺席守卫把「对手先走、a_id 已为空」的合法
+-- 场景误判成 TABLE_NOT_FOUND / ROOM_NOT_FOUND，提前 return，座位永远清不掉。
+--   只有 a_id 和 b_id 都为空才算真的不存在。
+--
+-- 注意（2026-10-09 核实线上）：
+--   * 线上 room_leave 只有 character 一个重载，且守卫已是修好的版本，不用动；
+--   * 线上 pvp_leave 仍是旧守卫（guard 未修复）——本文件只重建 pvp_leave，
+--     千万不要再加 room_leave(char(4))，否则双重载会让 PostgREST 报歧义。
+--
+-- 判负只属于「先走的人」（对局中退出走 finish_game）；后走的人进来时 status
+-- 已是 seated，判负块天然被跳过。
+--
+-- 用法：Supabase SQL Editor 全选粘贴 Run。可重复执行。
 
--- ===== 1. pvp_leave =====
 create or replace function public.pvp_leave(tid text)
 returns boolean
 language plpgsql security definer set search_path = public
@@ -88,90 +95,6 @@ begin
   where id = tid and (player_a_id = uid or player_b_id = uid);
 
   delete from public.pvp_watchers where user_id = uid;
-
-  return true;
-end;
-$$;
-
--- ===== 2. room_leave（char(4)，与线上现行版一致）=====
-create or replace function public.room_leave(code char(4))
-returns boolean
-language plpgsql security definer set search_path = public
-as $$
-declare
-  uid         uuid := auth.uid();
-  a_id        uuid;
-  b_id        uuid;
-  cstate      text;
-  my_side     text;
-  winner_side text;
-  winner_uid  uuid;
-begin
-  if uid is null then
-    raise exception 'NOT_AUTHENTICATED';
-  end if;
-
-  select player_a_id, player_b_id, status
-       into a_id, b_id, cstate
-  from public.private_rooms where room_code = code;
-  if a_id is null and b_id is null then
-    raise exception 'ROOM_NOT_FOUND';
-  end if;
-
-  if a_id <> uid and (b_id is null or b_id <> uid) then
-    raise exception 'NOT_YOUR_ROOM';
-  end if;
-
-  my_side := case when a_id = uid then 'a' when b_id = uid then 'b' else null end;
-  winner_side := case when my_side = 'a' then 'b' when my_side = 'b' then 'a' else null end;
-  winner_uid  := case when my_side = 'a' then b_id when my_side = 'b' then a_id else null end;
-
-  if cstate = 'playing' and my_side is not null and winner_uid is not null then
-    update public.private_rooms
-    set game_state = coalesce(game_state, '{}'::jsonb) || jsonb_build_object(
-          'moves', '[]'::jsonb,
-          'turn', '',
-          'winner', winner_side,
-             'status', 'finished',
-             'forfeit', true
-           ),
-         current_turn_id = null,
-         turn_deadline_at = null,
-         status = 'seated',
-         last_active_at = now()
-    where room_code = code;
-
-    perform public.finish_game(null, code, 'private', winner_uid, uid, null);
-  end if;
-
-  update public.private_rooms
-  set player_a_id = case when player_a_id = uid then null else player_a_id end,
-      player_b_id = case when player_b_id = uid then null else player_b_id end,
-      last_a_at   = case when player_a_id = uid then null else last_a_at end,
-      last_b_at   = case when player_b_id = uid then null else last_b_at end,
-      ready_a = case when player_a_id = uid then false else ready_a end,
-      ready_b = case when player_b_id = uid then false else ready_b end,
-      status = case when (player_a_id is null or player_a_id = uid)
-                     and (player_b_id is null or player_b_id = uid)
-                    then 'open' else status end,
-      game_state = case
-                     when (player_a_id = uid and player_b_id is null)
-                       or (player_b_id = uid and player_a_id is null)
-                     then '{}'::jsonb
-                     else game_state
-                   end,
-      current_turn_id = case when current_turn_id = uid then null else current_turn_id end,
-      turn_deadline_at = case when current_turn_id = uid then null else turn_deadline_at end,
-      last_active_at = now()
-  where room_code = code and (player_a_id = uid or player_b_id = uid);
-
-  select player_a_id, player_b_id into a_id, b_id
-  from public.private_rooms where room_code = code;
-  if a_id is null and b_id is null then
-    delete from public.private_room_watchers where room_code = code;
-  end if;
-
-  delete from public.private_room_watchers where user_id = uid;
 
   return true;
 end;

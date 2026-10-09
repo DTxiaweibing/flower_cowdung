@@ -4485,7 +4485,7 @@ begin
 
   from public.private_rooms where room_code = code;
 
-  if a_id is null then
+  if a_id is null and b_id is null then
 
     raise exception 'ROOM_NOT_FOUND';
 
