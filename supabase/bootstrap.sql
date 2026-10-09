@@ -2383,7 +2383,7 @@ begin
 
   from public.pvp_tables where id = tid;
 
-  if a_id is null then
+  if a_id is null and b_id is null then
 
     raise exception 'TABLE_NOT_FOUND';
 
@@ -6368,7 +6368,7 @@ begin
   select player_a_id, player_b_id, status
        into a_id, b_id, cstate
   from public.private_rooms where room_code = code;
-  if a_id is null then
+  if a_id is null and b_id is null then
     raise exception 'ROOM_NOT_FOUND';
   end if;
 
