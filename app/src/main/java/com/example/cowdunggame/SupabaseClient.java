@@ -751,7 +751,7 @@ public class SupabaseClient {
         return r != null && r.ok;
     }
 
-    // 人机结算：赢 true -> +1 胜场；false -> 仅 total_games+1（不扣分也不加分）
+    // 人机结算：赢 true -> +1 胜场；false -> 记录失败场次+1（不扣分也不加分）
     public boolean pveFinish(String playerId, boolean won) {
         if (playerId == null) return false;
         JSONObject args = new JSONObject();

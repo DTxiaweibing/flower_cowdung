@@ -1567,7 +1567,7 @@ public class LocalGameActivity extends Activity {
         }
         showResultImage(playerWin);
         reportSeated(); // 对局结束，回到「已入座」状态
-        // 人机积分：赢 +1（胜场+1），输仅总场次+1（不扣分也不加分）
+        // 人机积分：赢 +1（胜场+1），输记录失败场次+1（不扣分也不加分）
         if (client != null) {
             final boolean won = playerWin;
             async(new Runnable() {

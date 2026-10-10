@@ -1590,7 +1590,7 @@ begin
 
     update public.profiles
 
-     set total_games = total_games + 1
+     set total_games = total_games + 1, losses = losses + 1
 
      where id = in_player_id;
 
