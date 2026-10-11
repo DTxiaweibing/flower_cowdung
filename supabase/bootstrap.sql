@@ -1874,11 +1874,28 @@ begin
 
 
 
+  -- 原子占座：只有仍是空座才写得进去，否则后到者原子失败。
+  -- 只查再写两步之间有竞态窗口，两人几乎同时点会双双通过检查、后者覆盖前者，
+  -- 表现就是「同一张桌子坐进两个人」。把条件并入 UPDATE 由数据库保证原子。
   update public.pve_tables
 
   set player_id = uid, status = 'seated', game_state = '{}'::jsonb, last_active_at = now()
 
-  where id = tid;
+  where id = tid and player_id is null;
+
+  if not found then
+
+    select player_id into occupied from public.pve_tables where id = tid;
+
+    if occupied = uid then
+
+      return true;
+
+    end if;
+
+    raise exception 'TABLE_OCCUPIED';
+
+  end if;
 
 
 
@@ -2977,7 +2994,21 @@ begin
 
       last_active_at = now()
 
-  where id = tid;
+  where id = tid and player_a_id is null;
+
+  if not found then
+
+    select player_a_id into a_id from public.pvp_tables where id = tid;
+
+    if a_id = uid then
+
+      return true;
+
+    end if;
+
+    raise exception 'TABLE_OCCUPIED';
+
+  end if;
 
 
 
@@ -3090,7 +3121,21 @@ begin
 
       last_active_at = now()
 
-  where id = tid;
+  where id = tid and player_b_id is null;
+
+  if not found then
+
+    select player_b_id into b_id from public.pvp_tables where id = tid;
+
+    if b_id = uid then
+
+      return true;
+
+    end if;
+
+    raise exception 'TABLE_OCCUPIED';
+
+  end if;
 
 
 
@@ -5062,11 +5107,17 @@ begin
 
         last_active_at = now()
 
-    where room_code = code;
+    where room_code = code and player_a_id is null;
 
-    my_side := 'a';
+    if found then
 
-  elsif b_id is null then
+      my_side := 'a';
+
+    end if;
+
+  end if;
+
+  if my_side is null and b_id is null then
 
     update public.private_rooms
 
@@ -5102,11 +5153,17 @@ begin
 
         last_active_at = now()
 
-    where room_code = code;
+    where room_code = code and player_b_id is null;
 
-    my_side := 'b';
+    if found then
 
-  else
+      my_side := 'b';
+
+    end if;
+
+  end if;
+
+  if my_side is null then
 
     raise exception 'SEAT_UNAVAILABLE';
 
