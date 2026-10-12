@@ -28,6 +28,9 @@ public class PvELobbyActivity extends Activity {
     private static final int TOTAL_TABLES = 20; // 数据库预置桌数（与 pve_tables.sql 一致）
     private static final int ROW_COLS = 2;      // 一排放 2 张桌子
 
+    // 大厅每 3 秒拉一次，和人人大厅一致：有人入座/离开能很快反映出来。
+    private static final long POLL_MS = 3000;
+
     private final Handler ui = new Handler(Looper.getMainLooper());
     private SupabaseClient client;
     private SeatManager seatManager;
@@ -37,6 +40,23 @@ public class PvELobbyActivity extends Activity {
     private GameTableView.LayoutInfo layout;
 
     private final Map<String, JSONObject> tableStates = new HashMap<>();
+
+    // 差量刷新用：卡片只建一次，之后按签名比对，只重画状态变了的桌。
+    // 每次轮询都 removeAllViews() 重建 20 张卡会闪，还会吃掉用户正按下的那张卡。
+    private final Map<Integer, GameTableView> tableViews = new HashMap<>();
+    private final Map<Integer, String> lastSigs = new HashMap<>();
+    private boolean gridBuilt = false;
+    private boolean polling = false;
+    private boolean pollInFlight = false;
+
+    private final Runnable pollTick = new Runnable() {
+        @Override
+        public void run() {
+            if (!polling) return;
+            loadTables();
+            ui.postDelayed(this, POLL_MS);
+        }
+    };
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
@@ -74,25 +94,47 @@ public class PvELobbyActivity extends Activity {
         gridContainer.setPadding(layout.blankPx, layout.roomPadTop,
             layout.blankPx, layout.roomPadBottom);
 
-        // 先进数据库拉取每桌状态，再一次性渲染（不先渲染空骨架再覆盖）
-        loadTables();
+        // 20 张卡片骨架先摆出来，别让用户对着空屏等第一次网络返回。
+        // 卡面内容由 refresh() 填。
+        buildGrid();
+        gridBuilt = true;
     }
 
     @Override
     protected void onResume() {
         super.onResume();
-        loadTables(); // 从对局返回后刷新状态
+        // 从对局返回后刷新状态；停在本页时继续每 3 秒轮询，
+        // 免得「别人坐了还显示空闲，点下去才发现有人」。
+        startPolling();
+    }
+
+    @Override
+    protected void onPause() {
+        super.onPause();
+        stopPolling();
+    }
+
+    private void startPolling() {
+        if (polling) return;
+        polling = true;
+        ui.post(pollTick); // post 无延迟，进页面马上拉一次
+    }
+
+    private void stopPolling() {
+        polling = false;
+        ui.removeCallbacks(pollTick);
     }
 
     // ============================================================
     // 渲染
     // ============================================================
-    // 根据数据库状态刷新全部桌子
-    private void renderTables() {
+    // 只建一次 20 张卡片的骨架，之后靠 refresh() 差量更新卡面。
+    private void buildGrid() {
         gridContainer.removeAllViews();
+        tableViews.clear();
+        lastSigs.clear();
         int rowGapPx = (int) (10 * density);
         int rowIndex = -1;
-        final String myId = client.getUserId();
 
         for (int i = 0; i < TOTAL_TABLES; i++) {
             if (i % ROW_COLS == 0) {
@@ -109,24 +151,65 @@ public class PvELobbyActivity extends Activity {
             }
             LinearLayout rowView =
                 (LinearLayout) gridContainer.getChildAt(gridContainer.getChildCount() - 1);
-            addTableCard(rowView, i + 1, myId);
+            addTableCard(rowView, i + 1);
         }
     }
 
-    // 一张桌子卡片：桌面 + 座位状态（数据库驱动）+ 桌号
-    private void addTableCard(LinearLayout rowView, final int tableNo, final String myId) {
-        final JSONObject state = tableStates.get(String.valueOf(tableNo));
+    // 每轮刷新：算出每张桌的签名，只重画变了的。
+    private void refresh() {
+        if (!gridBuilt) {
+            buildGrid();
+            gridBuilt = true;
+        }
+        final String myId = client.getUserId();
+        for (int i = 0; i < TOTAL_TABLES; i++) {
+            final int tableNo = i + 1;
+            JSONObject st = tableStates.get(String.valueOf(tableNo));
+            String sig = sigOf(st);
+            if (sig.equals(lastSigs.get(tableNo))) continue;
+            lastSigs.put(tableNo, sig);
+            applyState(tableNo, st, myId);
+        }
+    }
 
+    // 签名覆盖卡面上会变的每一个东西：座位占用、对局状态、观众数、
+    // 以及入座玩家的性别与昵称。不覆盖 game_state —— 大厅根本不读它。
+    private String sigOf(JSONObject state) {
+        if (state == null) return "-";
+        StringBuilder sb = new StringBuilder();
+        sb.append(state.optString("status", "")).append('|')
+            .append(state.isNull("player_id") ? "" : state.optString("player_id")).append('|')
+            .append(state.optInt("watcher_count", 0));
+        JSONObject o = state.optJSONObject("player");
+        if (o == null) {
+            sb.append("|-");
+        } else {
+            sb.append('|').append(o.optString("gender", "")).append(':')
+                .append(o.optString("nickname", ""));
+        }
+        return sb.toString();
+    }
+
+    // 建一张空卡并登记；卡面内容留给 applyState 填。
+    private void addTableCard(LinearLayout rowView, final int tableNo) {
         GameTableView table = new GameTableView(this, layout);
         LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(
             layout.cardSidePx, layout.cardSidePx);
         if (rowView.getChildCount() > 0) lp.leftMargin = layout.blankPx;
         table.setLayoutParams(lp);
+        rowView.addView(table);
+        tableViews.put(tableNo, table);
+    }
+
+    // 把这一桌的最新状态画到已有卡片上。
+    private void applyState(final int tableNo, final JSONObject state, final String myId) {
+        GameTableView table = tableViews.get(tableNo);
+        if (table == null) return;
 
         // 从数据库状态驱动渲染
-        boolean playing = SeatManager.isPlaying(state);
         // 注意：player_id 为 JSON null 时 optString 返回字符串 "null"，必须用 isNull 判断
         boolean hasPlayer = SeatManager.hasPlayer(state);
+        boolean playing = SeatManager.isPlaying(state);
         int watchers = state != null ? state.optInt("watcher_count", 0) : 0;
         boolean iAmPlayer = SeatManager.isMySeat(state, myId);
 
@@ -157,15 +240,14 @@ public class PvELobbyActivity extends Activity {
             table.setPlayerLabel(leftNick); // 头像正下方显示昵称（仅玩家，观众不做）
         }
 
-        // 点击桌：选择坐下玩游戏 / 坐下当观众
+        // 重新绑 click：闭包里存的是这一份 state，差量刷新后 state 是最新的，
+        // 弹窗就不会再拿旧快照算「有人/空闲」。
         table.setOnClickListener(new View.OnClickListener() {
             @Override
             public void onClick(View v) {
                 showSeatDialog(tableNo, state, iAmPlayer);
             }
         });
-
-        rowView.addView(table);
     }
 
     // ============================================================
@@ -277,6 +359,10 @@ public class PvELobbyActivity extends Activity {
 
     // 从数据库拉取全部桌子状态并刷新渲染
     private void loadTables() {
+        // 上一轮还没回来就跳过本轮。3 秒一次的网络请求遇上弱网会叠成
+        // 一串并发，晚到的旧响应会把新状态盖回去。
+        if (pollInFlight) return;
+        pollInFlight = true;
         new Thread(new Runnable() {
             @Override
             public void run() {
@@ -284,6 +370,7 @@ public class PvELobbyActivity extends Activity {
                 ui.post(new Runnable() {
                     @Override
                     public void run() {
+                        pollInFlight = false;
                         tableStates.clear();
                         if (arr != null) {
                             for (int i = 0; i < arr.length(); i++) {
@@ -293,7 +380,7 @@ public class PvELobbyActivity extends Activity {
                                 } catch (Exception ignore) { }
                             }
                         }
-                        renderTables();
+                        refresh();
                     }
                 });
             }
