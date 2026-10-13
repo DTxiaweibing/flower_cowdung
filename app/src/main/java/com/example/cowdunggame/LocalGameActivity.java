@@ -590,10 +590,91 @@ public class LocalGameActivity extends Activity {
                 // 表现就是「人机对战点自己昵称没反应」。这里显式补上自己的 uid。
                 if (client != null) tvPlayerNameId = client.getUserId();
                 tvComputerNameId = null;   // 电脑没有账号，不给资料卡
-                setupGameBoard(false);
-                showGameRules();
-                addLog("机器人已就座并自动准备好，点「准备好了」开始");
+                if (savedInstanceState != null
+                        && savedInstanceState.getBoolean("pve_started", false)) {
+                    // 因重建（旋转 / 分屏尺寸变化 / 进程被回收）回到此处：还原棋局，不丢局
+                    restorePveGame(savedInstanceState);
+                } else {
+                    setupGameBoard(false);
+                    showGameRules();
+                    addLog("机器人已就座并自动准备好，点「准备好了」开始");
+                }
             }
+        }
+    }
+
+    // 旋转 / 分屏尺寸变化 / 进程被系统回收都会重建 Activity。人机对局完全在本地，
+    // 重建后棋局（剩余鲜花 / 落子记录 / 回合 / 倒计时 / 选择）本会丢光，这里存进 Bundle
+    // 以便重建后原样恢复。人人 / 私密房间不存：它们从服务端 game_state 重新拉回即可。
+    @Override
+    protected void onSaveInstanceState(Bundle outState) {
+        super.onSaveInstanceState(outState);
+        if (isWatcher || isPvp || isRoom) return; // 只有人机玩家模式做本地存档
+        if (!isGameStarted) return;               // 只在对局进行中存
+        outState.putBoolean("pve_started", true);
+        outState.putBoolean("pve_playerTurn", isPlayerTurn);
+        outState.putIntArray("pve_remaining", remainingFlowers);
+        outState.putString("pve_moves", moveList != null ? moveList.toString() : "[]");
+        outState.putInt("pve_gameCount", gameCount);
+        outState.putString("pve_log", tvGameLog != null ? tvGameLog.getText().toString() : "");
+        outState.putInt("pve_countdown", countdownSeconds);
+        boolean[] flat = new boolean[6 * 6];
+        if (selectedFlowers != null) {
+            for (int i = 0; i < 6; i++) {
+                if (selectedFlowers[i] == null) continue;
+                for (int s = 0; s < selectedFlowers[i].length && s < 6; s++) {
+                    flat[i * 6 + s] = selectedFlowers[i][s];
+                }
+            }
+        }
+        outState.putBooleanArray("pve_selected", flat);
+        outState.putInt("pve_selectedRow", selectedRow);
+        outState.putInt("pve_selectedCount", selectedCount);
+    }
+
+    // 从 Bundle 还原人机对局：棋盘 / 落子记录 / 回合 / 倒计时 / 选择状态。
+    // 仍轮到玩家 -> 恢复可点与剩余倒计时；仍轮到电脑 -> 续上 AI 落子。
+    private void restorePveGame(Bundle b) {
+        isGameStarted = true;
+        isPlayerTurn = b.getBoolean("pve_playerTurn", true);
+        int[] rem = b.getIntArray("pve_remaining");
+        if (rem != null && rem.length == 6) remainingFlowers = rem;
+        try {
+            moveList = new JSONArray(b.getString("pve_moves", "[]"));
+        } catch (Exception e) {
+            moveList = new JSONArray();
+        }
+        gameCount = b.getInt("pve_gameCount", gameCount);
+
+        resetSelectionState();
+        boolean[] flat = b.getBooleanArray("pve_selected");
+        if (flat != null) {
+            for (int i = 0; i < 6; i++) {
+                for (int s = 0; s < selectedFlowers[i].length; s++) {
+                    int idx = i * 6 + s;
+                    if (idx < flat.length) selectedFlowers[i][s] = flat[idx];
+                }
+            }
+            selectedRow = b.getInt("pve_selectedRow", -1);
+            selectedCount = b.getInt("pve_selectedCount", 0);
+        }
+
+        if (tvGameLog != null) tvGameLog.setText(b.getString("pve_log", ""));
+        btnExitGame.setVisibility(View.GONE);
+
+        setupGameBoard(isPlayerTurn);
+        if (isPlayerTurn) {
+            btnAction.setEnabled(true);
+            btnAction.setText(selectedCount > 0
+                ? "鲜花拿来 (" + selectedCount + "朵)" : "确认选择");
+            int secs = b.getInt("pve_countdown", PLAYER_TURN_SECONDS);
+            if (secs <= 0 || secs > PLAYER_TURN_SECONDS) secs = PLAYER_TURN_SECONDS;
+            startCountdown(true, secs);
+        } else {
+            btnAction.setEnabled(false);
+            btnAction.setText("电脑思考中...");
+            startCountdown(false, COMPUTER_THINK_SECONDS);
+            scheduleComputerTurn();
         }
     }
 
@@ -2997,8 +3078,13 @@ public class LocalGameActivity extends Activity {
         stopChat();
         if (seatManager != null) {
             seatManager.stopHeartbeat();
-            // 遗言机制：进程被清/异常退出，尽力写库释放座位/观战（服务端超时兜底）
-            if (tableNo != null && !tableNo.isEmpty() && !leavingTable) {
+            // 遗言机制：进程被清/异常退出，尽力写库释放座位/观战（服务端超时兜底）。
+            // 【关键】配置变更（旋转 / 分屏尺寸变化）同样会走到 onDestroy，但那不是
+            // 「离开」。此前这里无条件 leave，屏幕一旋转座位就被释放，别人随即能坐
+            // 上同一张桌 —— 表现为两个账号同坐在一张桌子上。用 isChangingConfigurations
+            // 区分：真退出才写遗言，配置变更只重建界面，座位原样保留。
+            if (!isChangingConfigurations()
+                    && tableNo != null && !tableNo.isEmpty() && !leavingTable) {
                 if (isPvp || isRoom) {
                     if (!isWatcher && isGameStarted) {
                         if (isRoom) {

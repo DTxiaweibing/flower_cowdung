@@ -8,6 +8,7 @@
         android:allowBackup="true"
         android:icon="@mipmap/ic_launcher"
         android:label="鲜花与牛粪"
+        android:resizeableActivity="false"
         android:theme="@style/AppTheme">
         <activity
             android:name=".AuthActivity"
