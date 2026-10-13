@@ -198,6 +198,9 @@ public class LocalGameActivity extends Activity {
 
     private ImageView resultImage;
 
+    // 结果图对应的胜负（仅人机本地存档用）：与 resultImage 同步，null 表示当前没显示结果图。
+    private Boolean pveResultPlayerWin = null;
+
     // 人机玩家每回合 180 秒。人人桌/私密房间不用这个值：真实秒数由服务端
     // turn_secs_left 返回（60 秒，见 fix_round_lifecycle.sql 的 pvp_turn_seconds），
     // 这里只在拉取失败时兜底显示。
@@ -591,7 +594,8 @@ public class LocalGameActivity extends Activity {
                 if (client != null) tvPlayerNameId = client.getUserId();
                 tvComputerNameId = null;   // 电脑没有账号，不给资料卡
                 if (savedInstanceState != null
-                        && savedInstanceState.getBoolean("pve_started", false)) {
+                        && (savedInstanceState.getBoolean("pve_started", false)
+                            || savedInstanceState.getBoolean("pve_ended", false))) {
                     // 因重建（旋转 / 分屏尺寸变化 / 进程被回收）回到此处：还原棋局，不丢局
                     restorePveGame(savedInstanceState);
                 } else {
@@ -605,18 +609,26 @@ public class LocalGameActivity extends Activity {
 
     // 旋转 / 分屏尺寸变化 / 进程被系统回收都会重建 Activity。人机对局完全在本地，
     // 重建后棋局（剩余鲜花 / 落子记录 / 回合 / 倒计时 / 选择）本会丢光，这里存进 Bundle
-    // 以便重建后原样恢复。人人 / 私密房间不存：它们从服务端 game_state 重新拉回即可。
+    // 以便重建后原样恢复。分两态：进行中(isGameStarted) 与 刚结束(结果图还在)。
+    // 人人 / 私密房间不存：它们从服务端 game_state 重新拉回即可。
     @Override
     protected void onSaveInstanceState(Bundle outState) {
         super.onSaveInstanceState(outState);
         if (isWatcher || isPvp || isRoom) return; // 只有人机玩家模式做本地存档
-        if (!isGameStarted) return;               // 只在对局进行中存
-        outState.putBoolean("pve_started", true);
+        boolean ended = (resultImage != null);    // 刚结束、结果图仍在
+        if (!isGameStarted && !ended) return;     // 既没在玩也没刚结束，无需存
+        outState.putBoolean("pve_started", isGameStarted);
+        outState.putBoolean("pve_ended", ended);
+        outState.putInt("pve_gameCount", gameCount);
+        outState.putString("pve_log", tvGameLog != null ? tvGameLog.getText().toString() : "");
+        if (ended) {
+            outState.putBoolean("pve_playerWin",
+                pveResultPlayerWin != null && pveResultPlayerWin);
+        }
+        if (!isGameStarted) return;               // 只是刚结束、不在玩：上面已存够
         outState.putBoolean("pve_playerTurn", isPlayerTurn);
         outState.putIntArray("pve_remaining", remainingFlowers);
         outState.putString("pve_moves", moveList != null ? moveList.toString() : "[]");
-        outState.putInt("pve_gameCount", gameCount);
-        outState.putString("pve_log", tvGameLog != null ? tvGameLog.getText().toString() : "");
         outState.putInt("pve_countdown", countdownSeconds);
         boolean[] flat = new boolean[6 * 6];
         if (selectedFlowers != null) {
@@ -632,9 +644,27 @@ public class LocalGameActivity extends Activity {
         outState.putInt("pve_selectedCount", selectedCount);
     }
 
-    // 从 Bundle 还原人机对局：棋盘 / 落子记录 / 回合 / 倒计时 / 选择状态。
-    // 仍轮到玩家 -> 恢复可点与剩余倒计时；仍轮到电脑 -> 续上 AI 落子。
+    // 从 Bundle 还原人机对局，分两态：
+    //   · 进行中：棋盘 / 落子记录 / 回合 / 倒计时 / 选择——轮到玩家则恢复可点，轮到电脑则续 AI 落子。
+    //   · 刚结束：满盘 + 「本局结束」日志 + 你赢/你输结果图（不再重放音效、不重复结算）。
     private void restorePveGame(Bundle b) {
+        gameCount = b.getInt("pve_gameCount", gameCount);
+        if (tvGameLog != null) tvGameLog.setText(b.getString("pve_log", ""));
+
+        if (!b.getBoolean("pve_started", false)) {
+            // —— 刚结束态 ——
+            isGameStarted = false;
+            remainingFlowers = new int[]{1, 2, 3, 4, 5, 6};
+            resetSelectionState();
+            setupGameBoard(false);
+            btnExitGame.setVisibility(View.VISIBLE);
+            btnAction.setText("准备好了");
+            btnAction.setEnabled(true);
+            showResultImage(b.getBoolean("pve_playerWin", false));
+            return;
+        }
+
+        // —— 进行中态 ——
         isGameStarted = true;
         isPlayerTurn = b.getBoolean("pve_playerTurn", true);
         int[] rem = b.getIntArray("pve_remaining");
@@ -644,7 +674,6 @@ public class LocalGameActivity extends Activity {
         } catch (Exception e) {
             moveList = new JSONArray();
         }
-        gameCount = b.getInt("pve_gameCount", gameCount);
 
         resetSelectionState();
         boolean[] flat = b.getBooleanArray("pve_selected");
@@ -659,7 +688,6 @@ public class LocalGameActivity extends Activity {
             selectedCount = b.getInt("pve_selectedCount", 0);
         }
 
-        if (tvGameLog != null) tvGameLog.setText(b.getString("pve_log", ""));
         btnExitGame.setVisibility(View.GONE);
 
         setupGameBoard(isPlayerTurn);
@@ -2260,6 +2288,7 @@ public class LocalGameActivity extends Activity {
     private void showResultImage(boolean playerWin) {
         if (rowsContainer == null) return;
         hideResultImage();
+        pveResultPlayerWin = playerWin;
         final ImageView result = new ImageView(this);
         result.setImageResource(playerWin ? R.drawable.you_win : R.drawable.you_lose);
         result.setScaleType(ImageView.ScaleType.FIT_CENTER);
@@ -2288,6 +2317,7 @@ public class LocalGameActivity extends Activity {
             }
             resultImage = null;
         }
+        pveResultPlayerWin = null;
     }
 
     // ===== 退出（第 25.4 条） =====
@@ -3079,11 +3109,11 @@ public class LocalGameActivity extends Activity {
         if (seatManager != null) {
             seatManager.stopHeartbeat();
             // 遗言机制：进程被清/异常退出，尽力写库释放座位/观战（服务端超时兜底）。
-            // 【关键】配置变更（旋转 / 分屏尺寸变化）同样会走到 onDestroy，但那不是
-            // 「离开」。此前这里无条件 leave，屏幕一旋转座位就被释放，别人随即能坐
-            // 上同一张桌 —— 表现为两个账号同坐在一张桌子上。用 isChangingConfigurations
-            // 区分：真退出才写遗言，配置变更只重建界面，座位原样保留。
-            if (!isChangingConfigurations()
+            // 【关键】只有真正 finish（用户离开）才写遗言 —— 用 isFinishing() 判断。
+            // 旋转 / 分屏尺寸变化导致的配置变更重建、以及「不保留活动」/后台被系统回收，
+            // 都不是「离开」，绝不能释放座位：一释放，别人随即能坐上同一张桌，表现为
+            // 两个账号同坐在一张桌上。这类非 finish 的销毁交给服务端超时兜底。
+            if (isFinishing()
                     && tableNo != null && !tableNo.isEmpty() && !leavingTable) {
                 if (isPvp || isRoom) {
                     if (!isWatcher && isGameStarted) {
